@@ -1,12 +1,44 @@
-name: Build and Release BoomNode
+name: BoomNode CI/CD
 
+# Запускать при КАЖДОМ пуше в main И при создании тегов
 on:
   push:
-    tags:
-      - 'v*' # Запускать при создании тега вроде v0.1.0
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
+  # --- Проверка кода (линтер + тесты) ---
+  check:
+    name: Проверка кода
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Проверка форматирования (go fmt)
+        run: test -z $(gofmt -l .) || (echo "Ошибка: код не отформатирован. Запусти gofmt -w ." && exit 1)
+
+      - name: Статический анализ (go vet)
+        run: go vet ./...
+
+      - name: Запуск тестов
+        run: go test ./... -v
+
+  # --- Сборка под все платформы ---
   build:
+    name: Сборка
+    needs: check  # Сначала проверка, потом сборка
+    if: startsWith(github.ref, 'refs/tags/v')  # Собираем ТОЛЬКО при тегах
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -30,7 +62,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.21'
 
       - name: Build
         env:
