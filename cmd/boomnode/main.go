@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/BSXLAbS2025/boomnode/internal/boomex"
 	"github.com/BSXLAbS2025/boomnode/internal/config"
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
 	"github.com/BSXLAbS2025/boomnode/internal/peer"
@@ -31,20 +32,23 @@ func main() {
 		case "add":
 			if len(os.Args) < 5 {
 				fmt.Println("Использование: bn peer add <адрес> <имя> <tcp-адрес>")
-				fmt.Println("Пример: bn peer add BM-DE-CYBER CyberPunk cyberpunk.de:24554")
 				os.Exit(1)
 			}
 			addPeer(os.Args[3], os.Args[4], os.Args[5])
 		case "list":
 			listPeers()
 		default:
-			fmt.Printf("Неизвестная подкоманда peer: %s\n", os.Args[2])
+			fmt.Printf("Неизвестная подкоманда: %s\n", os.Args[2])
+		}
+	case "msg":
+		if len(os.Args) < 5 {
+			fmt.Println("Использование: bn msg <кому> <тема> <текст>")
 			os.Exit(1)
 		}
+		sendMessage(os.Args[2], os.Args[3], os.Args[4])
 	default:
 		fmt.Printf("Неизвестная команда: %s\n", command)
 		printUsage()
-		os.Exit(1)
 	}
 }
 
@@ -52,9 +56,10 @@ func printUsage() {
 	fmt.Println("BoomNode - узел сети BoomNet")
 	fmt.Println()
 	fmt.Println("Команды:")
-	fmt.Println("  run                  Запустить узел")
-	fmt.Println("  peer add <адр> <имя> <tcp>  Добавить пира")
-	fmt.Println("  peer list            Список пиров")
+	fmt.Println("  run                        Запустить узел")
+	fmt.Println("  peer add <адр> <имя> <tcp> Добавить пира")
+	fmt.Println("  peer list                  Список пиров")
+	fmt.Println("  msg <кому> <тема> <текст>  Отправить сообщение")
 }
 
 func runNode() {
@@ -66,52 +71,48 @@ func runNode() {
 
 	store, err := storage.Open(cfg.Storage.DataDir)
 	if err != nil {
-		fmt.Printf("Ошибка открытия хранилища: %v\n", err)
+		fmt.Printf("Ошибка хранилища: %v\n", err)
 		os.Exit(1)
 	}
 	defer store.Close()
 
 	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
 	if err != nil {
-		keys, err = crypto.GenerateKeys()
-		if err != nil {
-			fmt.Printf("Ошибка генерации ключей: %v\n", err)
-			os.Exit(1)
-		}
-		if err := crypto.SaveKeys(keys, cfg.Storage.DataDir); err != nil {
-			fmt.Printf("Ошибка сохранения ключей: %v\n", err)
-			os.Exit(1)
-		}
+		keys, _ = crypto.GenerateKeys()
+		crypto.SaveKeys(keys, cfg.Storage.DataDir)
 	}
 
 	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 
-	fmt.Println("=== BoomNode v0.1.0-alpha ===")
+	fmt.Println("=== BoomNode v0.2.0-alpha ===")
 	fmt.Println("BoomNet: Where Ideas Detonate")
 	fmt.Println()
 	fmt.Printf("Адрес:     %s\n", address)
 	fmt.Printf("Имя узла:  %s\n", cfg.Node.Name)
-	fmt.Printf("Хранилище: %s\n", cfg.Storage.DataDir)
 	fmt.Println()
+
+	// Обработчик входящих сообщений
+	handler := func(session *boomex.Session, msg *boomex.Message) {
+		// Сохраняем сообщение в БД
+		fmt.Printf("[ВХОДЯЩЕЕ] %s -> %s: %s\n", msg.From, msg.To, msg.Subject)
+	}
+
+	// Запускаем сервер
+	server := boomex.NewServer("0.0.0.0:24554", handler)
+	if err := server.Start(); err != nil {
+		fmt.Printf("Ошибка запуска сервера: %v\n", err)
+		os.Exit(1)
+	}
+
 	fmt.Println("Узел запущен. Ожидание подключений...")
 	fmt.Println("(Нажми Ctrl+C для выхода)")
 
-	// Пока просто держим процесс живым
 	select {}
 }
 
 func addPeer(address, name, tcpAddr string) {
-	cfg, err := config.Load("boomnode.yaml")
-	if err != nil {
-		fmt.Printf("Ошибка загрузки конфига: %v\n", err)
-		os.Exit(1)
-	}
-
-	store, err := storage.Open(cfg.Storage.DataDir)
-	if err != nil {
-		fmt.Printf("Ошибка открытия хранилища: %v\n", err)
-		os.Exit(1)
-	}
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir)
 	defer store.Close()
 
 	p := peer.PeerInfo{
@@ -124,41 +125,60 @@ func addPeer(address, name, tcpAddr string) {
 	}
 
 	if err := peer.AddPeer(store.DB(), p); err != nil {
-		fmt.Printf("Ошибка добавления пира: %v\n", err)
+		fmt.Printf("Ошибка: %v\n", err)
 		os.Exit(1)
 	}
-
-	fmt.Printf("Пир %s (%s) добавлен успешно!\n", address, name)
+	fmt.Printf("Пир %s добавлен!\n", address)
 }
 
 func listPeers() {
-	cfg, err := config.Load("boomnode.yaml")
-	if err != nil {
-		fmt.Printf("Ошибка загрузки конфига: %v\n", err)
-		os.Exit(1)
-	}
-
-	store, err := storage.Open(cfg.Storage.DataDir)
-	if err != nil {
-		fmt.Printf("Ошибка открытия хранилища: %v\n", err)
-		os.Exit(1)
-	}
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir)
 	defer store.Close()
 
-	peers, err := peer.ListPeers(store.DB())
+	peers, _ := peer.ListPeers(store.DB())
+	if len(peers) == 0 {
+		fmt.Println("Нет пиров.")
+		return
+	}
+	for _, p := range peers {
+		fmt.Printf("  %s (%s) — %s [%d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
+	}
+}
+
+func sendMessage(to, subject, body string) {
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir)
+	defer store.Close()
+
+	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
 	if err != nil {
-		fmt.Printf("Ошибка получения списка пиров: %v\n", err)
+		fmt.Printf("Ошибка загрузки ключей: %v\n", err)
 		os.Exit(1)
 	}
 
-	if len(peers) == 0 {
-		fmt.Println("Нет добавленных пиров.")
-		return
+	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+
+	// Ищем пира в БД
+	peerInfo, err := peer.GetPeer(store.DB(), to)
+	if err != nil {
+		fmt.Printf("Пир %s не найден. Сначала добавьте его: bn peer add %s <имя> <tcp>\n", to, to)
+		os.Exit(1)
 	}
 
-	fmt.Println("Список пиров:")
-	fmt.Println("-------------")
-	for _, p := range peers {
-		fmt.Printf("  %s (%s) — %s [доверие: %d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
+	msg := boomex.Message{
+		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		From:      from,
+		To:        to,
+		Subject:   subject,
+		Body:      body,
+		Timestamp: time.Now(),
 	}
+
+	if err := boomex.SendMessageToPeer(peerInfo.TCPHost, msg); err != nil {
+		fmt.Printf("Ошибка отправки: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Сообщение отправлено!")
 }
