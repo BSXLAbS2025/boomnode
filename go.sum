@@ -1,0 +1,6 @@
+golang.org/x/crypto v0.24.0 h1:mnl8DM0o13XBIkxL1Wmx0HqWKoNWc4JhHqekA3wjG0=
+golang.org/x/crypto v0.24.0/go.mod h1:4DqYlqF5UaN3qFy8J9VRkq3Wq3Xm5YVY8jF1K8hTbM=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tGkLSi3vRhWP4Hp1+egCM4f4X2s=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VBQoA=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJEMqQ=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
