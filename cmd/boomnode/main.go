@@ -69,7 +69,8 @@ func runNode() {
 		os.Exit(1)
 	}
 
-	store, err := storage.Open(cfg.Storage.DataDir)
+	// Сервер открывает БД в read-write режиме
+	store, err := storage.Open(cfg.Storage.DataDir, false)
 	if err != nil {
 		fmt.Printf("Storage error: %v\n", err)
 		os.Exit(1)
@@ -117,7 +118,8 @@ func addPeer(address, name, tcpAddr string) {
 		os.Exit(1)
 	}
 
-	store, err := storage.Open(cfg.Storage.DataDir)
+	// Добавление пира требует запись в БД
+	store, err := storage.Open(cfg.Storage.DataDir, false)
 	if err != nil {
 		fmt.Printf("Storage error: %v\n", err)
 		os.Exit(1)
@@ -147,7 +149,8 @@ func listPeers() {
 		os.Exit(1)
 	}
 
-	store, err := storage.Open(cfg.Storage.DataDir)
+	// Список пиров только читает
+	store, err := storage.Open(cfg.Storage.DataDir, true)
 	if err != nil {
 		fmt.Printf("Storage error: %v\n", err)
 		os.Exit(1)
@@ -176,7 +179,8 @@ func sendMessage(to, subject, body string) {
 		os.Exit(1)
 	}
 
-	store, err := storage.Open(cfg.Storage.DataDir)
+	// Отправка сообщения читает пира, но не пишет в БД
+	store, err := storage.Open(cfg.Storage.DataDir, true)
 	if err != nil {
 		fmt.Printf("Storage error: %v\n", err)
 		os.Exit(1)
@@ -191,7 +195,6 @@ func sendMessage(to, subject, body string) {
 
 	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 
-	// Ищем пира в БД
 	peerInfo, err := peer.GetPeer(store.DB(), to)
 	if err != nil {
 		fmt.Printf("Peer %s not found. Add first: bn peer add %s <name> <tcp>\n", to, to)
@@ -199,6 +202,7 @@ func sendMessage(to, subject, body string) {
 	}
 
 	msg := boomex.Message{
+		Type:      boomex.TypeMSG,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
 		From:      from,
 		To:        to,
