@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/твой_ник/boomnode/internal/config"
-	"github.com/твой_ник/boomnode/internal/crypto"
+	"github.com/BSXLAbS2025/boomnode/internal/config"
+	"github.com/BSXLAbS2025/boomnode/internal/crypto"
 )
 
 func main() {
