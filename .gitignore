@@ -1,0 +1,14 @@
+# Бинарники
+boomnode
+boomnode.exe
+
+# Данные
+data/
+
+# Временные файлы
+*.tmp
+*.bak
+
+# IDE
+.vscode/
+.idea/
