@@ -1,6 +1,6 @@
 node:
-  name: "Ivan's BoomStation"
-  geo: "RU"  # RU, DE, ON и т.д. — твой регион
+  name: "BSX Station"
+  geo: "RU"
 
 storage:
   data_dir: "./data"
