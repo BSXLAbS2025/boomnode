@@ -5,17 +5,14 @@ import (
 	"net"
 )
 
-// MessageHandler — функция, вызываемая при получении сообщения
 type MessageHandler func(session *Session, msg *Message)
 
-// Server — TCP-сервер BoomEx
 type Server struct {
 	listenAddr string
 	handler    MessageHandler
 	listener   net.Listener
 }
 
-// NewServer создаёт новый сервер
 func NewServer(listenAddr string, handler MessageHandler) *Server {
 	return &Server{
 		listenAddr: listenAddr,
@@ -23,21 +20,19 @@ func NewServer(listenAddr string, handler MessageHandler) *Server {
 	}
 }
 
-// Start запускает сервер
 func (s *Server) Start() error {
 	var err error
 	s.listener, err = net.Listen("tcp", s.listenAddr)
 	if err != nil {
-		return fmt.Errorf("не могу слушать порт %s: %w", s.listenAddr, err)
+		return fmt.Errorf("listen error on %s: %w", s.listenAddr, err)
 	}
 
-	fmt.Printf("BoomEx сервер запущен на %s\n", s.listenAddr)
+	fmt.Printf("BoomEx server started on %s\n", s.listenAddr)
 
 	go s.acceptLoop()
 	return nil
 }
 
-// Stop останавливает сервер
 func (s *Server) Stop() error {
 	if s.listener != nil {
 		return s.listener.Close()
@@ -49,10 +44,8 @@ func (s *Server) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			// Сервер остановлен
 			return
 		}
-
 		go s.handleConnection(conn)
 	}
 }
@@ -61,19 +54,21 @@ func (s *Server) handleConnection(conn net.Conn) {
 	session := NewSession(conn)
 	defer session.Close()
 
-	fmt.Printf("Новое подключение от %s\n", session.RemoteAddr())
+	fmt.Printf("New connection from %s\n", session.RemoteAddr())
 
 	for {
 		msg, err := session.Receive()
 		if err != nil {
-			fmt.Printf("Соединение с %s закрыто: %v\n", session.RemoteAddr(), err)
+			fmt.Printf("Connection from %s closed: %v\n", session.RemoteAddr(), err)
 			return
 		}
 
-		fmt.Printf("Получено сообщение от %s:\n", msg.From)
-		fmt.Printf("  Кому: %s\n", msg.To)
-		fmt.Printf("  Тема: %s\n", msg.Subject)
-		fmt.Printf("  Текст: %s\n", msg.Body)
+		fmt.Printf("=== INCOMING MESSAGE ===\n")
+		fmt.Printf("From:    %s\n", msg.From)
+		fmt.Printf("To:      %s\n", msg.To)
+		fmt.Printf("Subject: %s\n", msg.Subject)
+		fmt.Printf("Body:    %s\n", msg.Body)
+		fmt.Printf("=========================\n")
 
 		if s.handler != nil {
 			s.handler(session, msg)
