@@ -100,7 +100,7 @@ func runNode() {
 		fmt.Printf("=========================\n")
 	}
 
-	server := boomex.NewServer("0.0.0.0:24554", handler)
+	server := boomex.NewServer("0.0.0.0:24554", address, handler)
 	if err := server.Start(); err != nil {
 		fmt.Printf("Server error: %v\n", err)
 		os.Exit(1)
@@ -209,7 +209,7 @@ func sendMessage(to, subject, body string) {
 
 	fmt.Printf("Sending message to %s at %s...\n", peerInfo.Address, peerInfo.TCPHost)
 
-	if err := boomex.SendMessageToPeer(peerInfo.TCPHost, msg); err != nil {
+	if err := boomex.SendMessageToPeer(peerInfo.TCPHost, from, msg); err != nil {
 		fmt.Printf("Send error: %v\n", err)
 		os.Exit(1)
 	}
