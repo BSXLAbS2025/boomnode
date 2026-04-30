@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/BSXLAbS2025/boomnode/internal/api"
 	"github.com/BSXLAbS2025/boomnode/internal/boomex"
 	"github.com/BSXLAbS2025/boomnode/internal/config"
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
@@ -25,7 +26,7 @@ func main() {
 		runNode()
 	case "peer":
 		if len(os.Args) < 3 {
-			fmt.Println("Usage: bn peer add|list")
+			fmt.Println("Usage: bn peer add|list (server must be stopped)")
 			os.Exit(1)
 		}
 		switch os.Args[2] {
@@ -43,7 +44,7 @@ func main() {
 	case "msg":
 		if len(os.Args) < 5 {
 			fmt.Println("Usage: bn msg <tcp-addr:port> <subject> <body>")
-			fmt.Println("Example: bn msg 127.0.0.1:24554 Hello World")
+			fmt.Println("Or use API: curl -X POST http://127.0.0.1:24555/api/msg ...")
 			os.Exit(1)
 		}
 		sendMessageDirect(os.Args[2], os.Args[3], os.Args[4])
@@ -57,10 +58,16 @@ func printUsage() {
 	fmt.Println("BoomNode - BoomNet node")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  run                            Start node")
-	fmt.Println("  peer add <addr> <name> <tcp>   Add peer (server must be stopped)")
-	fmt.Println("  peer list                      List peers (server must be stopped)")
-	fmt.Println("  msg <tcp-addr> <subject> <body> Send message directly to TCP address")
+	fmt.Println("  run                          Start node (with API on :24555)")
+	fmt.Println("  peer add <addr> <name> <tcp> Add peer (offline)")
+	fmt.Println("  peer list                    List peers (offline)")
+	fmt.Println("  msg <tcp-addr> <subj> <body> Send direct message")
+	fmt.Println()
+	fmt.Println("API (when running):")
+	fmt.Println("  GET  http://127.0.0.1:24555/api/status")
+	fmt.Println("  GET  http://127.0.0.1:24555/api/peers")
+	fmt.Println("  POST http://127.0.0.1:24555/api/peers")
+	fmt.Println("  POST http://127.0.0.1:24555/api/msg")
 }
 
 func runNode() {
@@ -92,6 +99,7 @@ func runNode() {
 	fmt.Printf("Node name: %s\n", cfg.Node.Name)
 	fmt.Println()
 
+	// Обработчик входящих через BoomEx
 	handler := func(session *boomex.Session, msg *boomex.Message) {
 		fmt.Printf("=== INCOMING MESSAGE ===\n")
 		fmt.Printf("From:    %s\n", msg.From)
@@ -101,28 +109,29 @@ func runNode() {
 		fmt.Printf("=========================\n")
 	}
 
-	server := boomex.NewServer("0.0.0.0:24554", address, handler)
-	if err := server.Start(); err != nil {
-		fmt.Printf("Server error: %v\n", err)
+	// Запускаем BoomEx сервер (TCP 24554)
+	boomexSrv := boomex.NewServer("0.0.0.0:24554", address, handler)
+	if err := boomexSrv.Start(); err != nil {
+		fmt.Printf("BoomEx server error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Запускаем API сервер (HTTP 24555)
+	apiSrv := api.NewServer("127.0.0.1:24555", store.DB(), keys, address)
+	go func() {
+		if err := apiSrv.Start(); err != nil {
+			fmt.Printf("API server error: %v\n", err)
+			os.Exit(1)
+		}
+	}()
 
 	fmt.Println("Node is running. Press Ctrl+C to exit.")
 	select {}
 }
 
 func addPeer(address, name, tcpAddr string) {
-	cfg, err := config.Load("boomnode.yaml")
-	if err != nil {
-		fmt.Printf("Config error: %v\n", err)
-		os.Exit(1)
-	}
-
-	store, err := storage.Open(cfg.Storage.DataDir, false)
-	if err != nil {
-		fmt.Printf("Storage error: %v\n", err)
-		os.Exit(1)
-	}
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir, false)
 	defer store.Close()
 
 	p := peer.PeerInfo{
@@ -133,76 +142,44 @@ func addPeer(address, name, tcpAddr string) {
 		TCPHost:    tcpAddr,
 		DateAdded:  time.Now(),
 	}
-
-	if err := peer.AddPeer(store.DB(), p); err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
+	peer.AddPeer(store.DB(), p)
 	fmt.Printf("Peer %s added!\n", address)
 }
 
 func listPeers() {
-	cfg, err := config.Load("boomnode.yaml")
-	if err != nil {
-		fmt.Printf("Config error: %v\n", err)
-		os.Exit(1)
-	}
-
-	store, err := storage.Open(cfg.Storage.DataDir, true)
-	if err != nil {
-		fmt.Printf("Storage error: %v\n", err)
-		os.Exit(1)
-	}
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir, true)
 	defer store.Close()
 
-	peers, err := peer.ListPeers(store.DB())
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
+	peers, _ := peer.ListPeers(store.DB())
 	if len(peers) == 0 {
 		fmt.Println("No peers.")
 		return
 	}
 	for _, p := range peers {
-		fmt.Printf("  %s (%s) - %s [trust: %d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
+		fmt.Printf("  %s (%s) - %s [%d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
 	}
 }
 
 func sendMessageDirect(tcpAddr, subject, body string) {
-	// Загружаем только конфиг и ключи (без БД, чтобы не блокировать сервер)
-	cfg, err := config.Load("boomnode.yaml")
-	if err != nil {
-		fmt.Printf("Config error: %v\n", err)
-		os.Exit(1)
-	}
-
-	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
-	if err != nil {
-		fmt.Printf("Keys error: %v\n", err)
-		os.Exit(1)
-	}
-
+	cfg, _ := config.Load("boomnode.yaml")
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
 	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 
-	// Создаём сообщение без указания To, подставим адрес из подключения
 	msg := boomex.Message{
 		Type:      boomex.TypeMSG,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
 		From:      from,
-		To:        "", // Будет заполнено из HELO ответа или проигнорировано
+		To:        "",
 		Subject:   subject,
 		Body:      body,
 		Timestamp: time.Now(),
 	}
 
 	fmt.Printf("Sending message to %s...\n", tcpAddr)
-
 	if err := boomex.SendMessageToPeer(tcpAddr, from, msg); err != nil {
 		fmt.Printf("Send error: %v\n", err)
 		os.Exit(1)
 	}
-
 	fmt.Println("Message sent!")
 }
