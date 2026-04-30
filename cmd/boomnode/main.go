@@ -25,53 +25,53 @@ func main() {
 		runNode()
 	case "peer":
 		if len(os.Args) < 3 {
-			fmt.Println("Использование: bn peer add|list")
+			fmt.Println("Usage: bn peer add|list")
 			os.Exit(1)
 		}
 		switch os.Args[2] {
 		case "add":
 			if len(os.Args) < 5 {
-				fmt.Println("Использование: bn peer add <адрес> <имя> <tcp-адрес>")
+				fmt.Println("Usage: bn peer add <addr> <name> <tcp>")
 				os.Exit(1)
 			}
 			addPeer(os.Args[3], os.Args[4], os.Args[5])
 		case "list":
 			listPeers()
 		default:
-			fmt.Printf("Неизвестная подкоманда: %s\n", os.Args[2])
+			fmt.Printf("Unknown peer command: %s\n", os.Args[2])
 		}
 	case "msg":
 		if len(os.Args) < 5 {
-			fmt.Println("Использование: bn msg <кому> <тема> <текст>")
+			fmt.Println("Usage: bn msg <to> <subject> <body>")
 			os.Exit(1)
 		}
 		sendMessage(os.Args[2], os.Args[3], os.Args[4])
 	default:
-		fmt.Printf("Неизвестная команда: %s\n", command)
+		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
 	}
 }
 
 func printUsage() {
-	fmt.Println("BoomNode - узел сети BoomNet")
+	fmt.Println("BoomNode - BoomNet node")
 	fmt.Println()
-	fmt.Println("Команды:")
-	fmt.Println("  run                        Запустить узел")
-	fmt.Println("  peer add <адр> <имя> <tcp> Добавить пира")
-	fmt.Println("  peer list                  Список пиров")
-	fmt.Println("  msg <кому> <тема> <текст>  Отправить сообщение")
+	fmt.Println("Commands:")
+	fmt.Println("  run                        Start node")
+	fmt.Println("  peer add <addr> <name> <tcp> Add peer")
+	fmt.Println("  peer list                  List peers")
+	fmt.Println("  msg <to> <subject> <body>  Send message")
 }
 
 func runNode() {
 	cfg, err := config.Load("boomnode.yaml")
 	if err != nil {
-		fmt.Printf("Ошибка загрузки конфига: %v\n", err)
+		fmt.Printf("Config error: %v\n", err)
 		os.Exit(1)
 	}
 
 	store, err := storage.Open(cfg.Storage.DataDir)
 	if err != nil {
-		fmt.Printf("Ошибка хранилища: %v\n", err)
+		fmt.Printf("Storage error: %v\n", err)
 		os.Exit(1)
 	}
 	defer store.Close()
@@ -87,32 +87,41 @@ func runNode() {
 	fmt.Println("=== BoomNode v0.2.0-alpha ===")
 	fmt.Println("BoomNet: Where Ideas Detonate")
 	fmt.Println()
-	fmt.Printf("Адрес:     %s\n", address)
-	fmt.Printf("Имя узла:  %s\n", cfg.Node.Name)
+	fmt.Printf("Address:   %s\n", address)
+	fmt.Printf("Node name: %s\n", cfg.Node.Name)
 	fmt.Println()
 
-	// Обработчик входящих сообщений
 	handler := func(session *boomex.Session, msg *boomex.Message) {
-		// Сохраняем сообщение в БД
-		fmt.Printf("[ВХОДЯЩЕЕ] %s -> %s: %s\n", msg.From, msg.To, msg.Subject)
+		fmt.Printf("=== INCOMING MESSAGE ===\n")
+		fmt.Printf("From:    %s\n", msg.From)
+		fmt.Printf("To:      %s\n", msg.To)
+		fmt.Printf("Subject: %s\n", msg.Subject)
+		fmt.Printf("Body:    %s\n", msg.Body)
+		fmt.Printf("=========================\n")
 	}
 
-	// Запускаем сервер
 	server := boomex.NewServer("0.0.0.0:24554", handler)
 	if err := server.Start(); err != nil {
-		fmt.Printf("Ошибка запуска сервера: %v\n", err)
+		fmt.Printf("Server error: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Узел запущен. Ожидание подключений...")
-	fmt.Println("(Нажми Ctrl+C для выхода)")
-
+	fmt.Println("Node is running. Press Ctrl+C to exit.")
 	select {}
 }
 
 func addPeer(address, name, tcpAddr string) {
-	cfg, _ := config.Load("boomnode.yaml")
-	store, _ := storage.Open(cfg.Storage.DataDir)
+	cfg, err := config.Load("boomnode.yaml")
+	if err != nil {
+		fmt.Printf("Config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	store, err := storage.Open(cfg.Storage.DataDir)
+	if err != nil {
+		fmt.Printf("Storage error: %v\n", err)
+		os.Exit(1)
+	}
 	defer store.Close()
 
 	p := peer.PeerInfo{
@@ -125,35 +134,58 @@ func addPeer(address, name, tcpAddr string) {
 	}
 
 	if err := peer.AddPeer(store.DB(), p); err != nil {
-		fmt.Printf("Ошибка: %v\n", err)
+		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Пир %s добавлен!\n", address)
+	fmt.Printf("Peer %s added!\n", address)
 }
 
 func listPeers() {
-	cfg, _ := config.Load("boomnode.yaml")
-	store, _ := storage.Open(cfg.Storage.DataDir)
+	cfg, err := config.Load("boomnode.yaml")
+	if err != nil {
+		fmt.Printf("Config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	store, err := storage.Open(cfg.Storage.DataDir)
+	if err != nil {
+		fmt.Printf("Storage error: %v\n", err)
+		os.Exit(1)
+	}
 	defer store.Close()
 
-	peers, _ := peer.ListPeers(store.DB())
+	peers, err := peer.ListPeers(store.DB())
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	if len(peers) == 0 {
-		fmt.Println("Нет пиров.")
+		fmt.Println("No peers.")
 		return
 	}
 	for _, p := range peers {
-		fmt.Printf("  %s (%s) — %s [%d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
+		fmt.Printf("  %s (%s) - %s [trust: %d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
 	}
 }
 
 func sendMessage(to, subject, body string) {
-	cfg, _ := config.Load("boomnode.yaml")
-	store, _ := storage.Open(cfg.Storage.DataDir)
+	cfg, err := config.Load("boomnode.yaml")
+	if err != nil {
+		fmt.Printf("Config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	store, err := storage.Open(cfg.Storage.DataDir)
+	if err != nil {
+		fmt.Printf("Storage error: %v\n", err)
+		os.Exit(1)
+	}
 	defer store.Close()
 
 	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
 	if err != nil {
-		fmt.Printf("Ошибка загрузки ключей: %v\n", err)
+		fmt.Printf("Keys error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -162,7 +194,7 @@ func sendMessage(to, subject, body string) {
 	// Ищем пира в БД
 	peerInfo, err := peer.GetPeer(store.DB(), to)
 	if err != nil {
-		fmt.Printf("Пир %s не найден. Сначала добавьте его: bn peer add %s <имя> <tcp>\n", to, to)
+		fmt.Printf("Peer %s not found. Add first: bn peer add %s <name> <tcp>\n", to, to)
 		os.Exit(1)
 	}
 
@@ -175,10 +207,12 @@ func sendMessage(to, subject, body string) {
 		Timestamp: time.Now(),
 	}
 
+	fmt.Printf("Sending message to %s at %s...\n", peerInfo.Address, peerInfo.TCPHost)
+
 	if err := boomex.SendMessageToPeer(peerInfo.TCPHost, msg); err != nil {
-		fmt.Printf("Ошибка отправки: %v\n", err)
+		fmt.Printf("Send error: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Сообщение отправлено!")
+	fmt.Println("Message sent!")
 }
