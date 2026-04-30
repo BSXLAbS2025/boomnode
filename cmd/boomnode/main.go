@@ -42,10 +42,11 @@ func main() {
 		}
 	case "msg":
 		if len(os.Args) < 5 {
-			fmt.Println("Usage: bn msg <to> <subject> <body>")
+			fmt.Println("Usage: bn msg <tcp-addr:port> <subject> <body>")
+			fmt.Println("Example: bn msg 127.0.0.1:24554 Hello World")
 			os.Exit(1)
 		}
-		sendMessage(os.Args[2], os.Args[3], os.Args[4])
+		sendMessageDirect(os.Args[2], os.Args[3], os.Args[4])
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -56,10 +57,10 @@ func printUsage() {
 	fmt.Println("BoomNode - BoomNet node")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  run                        Start node")
-	fmt.Println("  peer add <addr> <name> <tcp> Add peer")
-	fmt.Println("  peer list                  List peers")
-	fmt.Println("  msg <to> <subject> <body>  Send message")
+	fmt.Println("  run                            Start node")
+	fmt.Println("  peer add <addr> <name> <tcp>   Add peer (server must be stopped)")
+	fmt.Println("  peer list                      List peers (server must be stopped)")
+	fmt.Println("  msg <tcp-addr> <subject> <body> Send message directly to TCP address")
 }
 
 func runNode() {
@@ -69,7 +70,6 @@ func runNode() {
 		os.Exit(1)
 	}
 
-	// Сервер открывает БД в read-write режиме
 	store, err := storage.Open(cfg.Storage.DataDir, false)
 	if err != nil {
 		fmt.Printf("Storage error: %v\n", err)
@@ -118,7 +118,6 @@ func addPeer(address, name, tcpAddr string) {
 		os.Exit(1)
 	}
 
-	// Добавление пира требует запись в БД
 	store, err := storage.Open(cfg.Storage.DataDir, false)
 	if err != nil {
 		fmt.Printf("Storage error: %v\n", err)
@@ -149,7 +148,6 @@ func listPeers() {
 		os.Exit(1)
 	}
 
-	// Список пиров только читает
 	store, err := storage.Open(cfg.Storage.DataDir, true)
 	if err != nil {
 		fmt.Printf("Storage error: %v\n", err)
@@ -172,20 +170,13 @@ func listPeers() {
 	}
 }
 
-func sendMessage(to, subject, body string) {
+func sendMessageDirect(tcpAddr, subject, body string) {
+	// Загружаем только конфиг и ключи (без БД, чтобы не блокировать сервер)
 	cfg, err := config.Load("boomnode.yaml")
 	if err != nil {
 		fmt.Printf("Config error: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Отправка сообщения читает пира, но не пишет в БД
-	store, err := storage.Open(cfg.Storage.DataDir, true)
-	if err != nil {
-		fmt.Printf("Storage error: %v\n", err)
-		os.Exit(1)
-	}
-	defer store.Close()
 
 	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
 	if err != nil {
@@ -195,25 +186,20 @@ func sendMessage(to, subject, body string) {
 
 	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 
-	peerInfo, err := peer.GetPeer(store.DB(), to)
-	if err != nil {
-		fmt.Printf("Peer %s not found. Add first: bn peer add %s <name> <tcp>\n", to, to)
-		os.Exit(1)
-	}
-
+	// Создаём сообщение без указания To, подставим адрес из подключения
 	msg := boomex.Message{
 		Type:      boomex.TypeMSG,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
 		From:      from,
-		To:        to,
+		To:        "", // Будет заполнено из HELO ответа или проигнорировано
 		Subject:   subject,
 		Body:      body,
 		Timestamp: time.Now(),
 	}
 
-	fmt.Printf("Sending message to %s at %s...\n", peerInfo.Address, peerInfo.TCPHost)
+	fmt.Printf("Sending message to %s...\n", tcpAddr)
 
-	if err := boomex.SendMessageToPeer(peerInfo.TCPHost, from, msg); err != nil {
+	if err := boomex.SendMessageToPeer(tcpAddr, from, msg); err != nil {
 		fmt.Printf("Send error: %v\n", err)
 		os.Exit(1)
 	}
