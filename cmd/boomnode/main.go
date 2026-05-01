@@ -126,7 +126,7 @@ func prettyPrintJSON(raw string) {
 	fmt.Println(string(formatted))
 }
 // downloadFile скачивает файл через API
-	downloadFile(method, path string, body interface{}, filename string) {
+func downloadFile(method, path string, body interface{}, filename string) {
 	var bodyReader io.Reader
 	if body != nil {
 		data, _ := json.Marshal(body)
