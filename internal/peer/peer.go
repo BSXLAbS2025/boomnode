@@ -81,3 +81,24 @@ func ListPeers(db *bolt.DB) ([]PeerInfo, error) {
 	})
 	return peers, err
 }
+
+// UpdatePeerTCP обновляет TCP-адрес пира
+func UpdatePeerTCP(db *bolt.DB, address string, tcpHost string) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("peers"))
+		if b == nil {
+			return fmt.Errorf("bucket 'peers' not found")
+		}
+		data := b.Get([]byte(address))
+		if data == nil {
+			return fmt.Errorf("peer %s not found", address)
+		}
+		var p PeerInfo
+		if err := json.Unmarshal(data, &p); err != nil {
+			return err
+		}
+		p.TCPHost = tcpHost
+		newData, _ := json.Marshal(p)
+		return b.Put([]byte(address), newData)
+	})
+}
