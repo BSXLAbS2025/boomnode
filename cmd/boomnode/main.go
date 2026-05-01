@@ -25,30 +25,25 @@ func main() {
 	switch command {
 	case "run":
 		runNode()
+
 	case "peer":
-		if len(os.Args) < 3 {
-			fmt.Println("Usage: bn peer add|list (server must be stopped)")
-			os.Exit(1)
-		}
-		switch os.Args[2] {
-		case "add":
-			if len(os.Args) < 5 {
-				fmt.Println("Usage: bn peer add <addr> <name> <tcp>")
-				os.Exit(1)
-			}
-			addPeer(os.Args[3], os.Args[4], os.Args[5])
-		case "list":
-			listPeers()
-		default:
-			fmt.Printf("Unknown peer command: %s\n", os.Args[2])
-		}
+		handlePeerCommand()
+
 	case "msg":
-		if len(os.Args) < 5 {
-			fmt.Println("Usage: bn msg <tcp-addr:port> <subject> <body>")
-			fmt.Println("Or use API: curl -X POST http://127.0.0.1:24555/api/msg ...")
-			os.Exit(1)
-		}
-		sendMessageDirect(os.Args[2], os.Args[3], os.Args[4])
+		handleMsgCommand()
+
+	case "export":
+		handleExportCommand()
+
+	case "import":
+		handleImportCommand()
+
+	case "status":
+		handleStatusCommand()
+
+	case "mesh":
+		handleMeshCommand()
+
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -59,20 +54,18 @@ func printUsage() {
 	fmt.Println("BoomNode - BoomNet node")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  run                          Start node (BoomEx + BoomMesh + API)")
-	fmt.Println("  peer add <addr> <name> <tcp> Add peer (offline)")
-	fmt.Println("  peer list                    List peers (offline)")
-	fmt.Println("  msg <tcp-addr> <subj> <body> Send direct message")
-	fmt.Println()
-	fmt.Println("API (when running):")
-	fmt.Println("  GET  http://127.0.0.1:24555/api/status")
-	fmt.Println("  GET  http://127.0.0.1:24555/api/peers")
-	fmt.Println("  POST http://127.0.0.1:24555/api/peers")
-	fmt.Println("  POST http://127.0.0.1:24555/api/msg")
-	fmt.Println("  GET  http://127.0.0.1:24555/api/mesh")
-	fmt.Println("  POST http://127.0.0.1:24555/api/export (sneakernet)")
-	fmt.Println("  POST http://127.0.0.1:24555/api/import (sneakernet)")
+	fmt.Println("  run                              Start node")
+	fmt.Println("  status                           Show node status")
+	fmt.Println("  peer add <bm-addr> <name>        Add peer by BM address")
+	fmt.Println("  peer list                        List peers")
+	fmt.Println("  msg <bm-addr> <subject> <body>   Send message to peer")
+	fmt.Println("  export <bm-addr> [file]          Export messages for sneakernet")
+	fmt.Println("  import <file>                    Import messages from sneakernet")
+	fmt.Println("  mesh list                        List known DHT peers")
+	fmt.Println("  mesh add <addr> <udp_addr>       Add DHT peer manually")
 }
+
+// --- RUN ---
 
 func runNode() {
 	cfg, err := config.Load("boomnode.yaml")
@@ -102,11 +95,13 @@ func runNode() {
 	fmt.Println()
 	fmt.Printf("Address:   %s\n", address)
 	fmt.Printf("Node name: %s\n", cfg.Node.Name)
+	fmt.Printf("Mode:      %s\n", cfg.Node.Mode)
 	fmt.Println()
 
-	// --- BoomMesh (P2P-оверлей) ---
+	// BoomMesh
 	dht := mesh.NewDHT()
-	meshSrv, err := mesh.NewServer("0.0.0.0:24553", dht, address, pubKeyStr, true)
+	isRelay := cfg.Node.Mode == "relay"
+	meshSrv, err := mesh.NewServer("0.0.0.0:24553", dht, address, pubKeyStr, isRelay)
 	if err != nil {
 		fmt.Printf("BoomMesh error: %v\n", err)
 		os.Exit(1)
@@ -117,29 +112,22 @@ func runNode() {
 	}
 	defer meshSrv.Stop()
 
-	// --- BoomEx (почтовый протокол) ---
+	// BoomEx
 	handler := func(session *boomex.Session, msg *boomex.Message) {
-		fmt.Printf("=== INCOMING MESSAGE ===\n")
-		fmt.Printf("From:    %s\n", msg.From)
-		fmt.Printf("To:      %s\n", msg.To)
-		fmt.Printf("Subject: %s\n", msg.Subject)
-		fmt.Printf("Body:    %s\n", msg.Body)
-		fmt.Printf("=========================\n")
-
+		fmt.Printf("=== INCOMING MESSAGE ===\nFrom: %s\nSubject: %s\nBody: %s\n=========================\n", msg.From, msg.Subject, msg.Body)
 		if msg.To != address && store.DB() != nil {
 			boomex.StoreMessageForRelay(store.DB(), msg)
 			fmt.Printf("Stored relay message: %s -> %s\n", msg.From, msg.To)
 		}
 	}
 
-	isRelay := cfg.Node.Mode == "relay"
 	boomexSrv := boomex.NewServer("0.0.0.0:24554", address, store.DB(), isRelay, cfg.Relay.Whitelist, handler)
 	if err := boomexSrv.Start(); err != nil {
 		fmt.Printf("BoomEx server error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// --- API ---
+	// API
 	apiSrv := api.NewServer("127.0.0.1:24555", store.DB(), keys, address, dht, meshSrv)
 	go func() {
 		if err := apiSrv.Start(); err != nil {
@@ -149,66 +137,195 @@ func runNode() {
 	}()
 
 	fmt.Println("Node is running. Press Ctrl+C to exit.")
-	fmt.Println()
-	fmt.Println("Services:")
-	fmt.Println("  BoomEx  : TCP 0.0.0.0:24554 (почта)")
-	fmt.Println("  BoomMesh: UDP 0.0.0.0:24553 (P2P-оверлей)")
-	fmt.Println("  API     : HTTP 127.0.0.1:24555 (управление)")
-	fmt.Println("  Sneaker : Export/Import .bpack files")
+	fmt.Println("Services: BoomEx :24554 | BoomMesh :24553 | API :24555")
 	select {}
 }
 
-func addPeer(address, name, tcpAddr string) {
-	cfg, _ := config.Load("boomnode.yaml")
-	store, _ := storage.Open(cfg.Storage.DataDir, false)
-	defer store.Close()
+// --- PEER ---
 
-	p := peer.PeerInfo{
-		Address:    address,
-		Name:       name,
-		TrustLevel: 5,
-		Transport:  "tcp",
-		TCPHost:    tcpAddr,
-		DateAdded:  time.Now(),
+func handlePeerCommand() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: bn peer add <bm-addr> <name>")
+		fmt.Println("       bn peer list")
+		os.Exit(1)
 	}
-	peer.AddPeer(store.DB(), p)
-	fmt.Printf("Peer %s added!\n", address)
+
+	cfg, _ := config.Load("boomnode.yaml")
+
+	switch os.Args[2] {
+	case "add":
+		if len(os.Args) < 5 {
+			fmt.Println("Usage: bn peer add <bm-addr> <name>")
+			os.Exit(1)
+		}
+		store, _ := storage.Open(cfg.Storage.DataDir, false)
+		defer store.Close()
+
+		p := peer.PeerInfo{
+			Address:    os.Args[3],
+			Name:       os.Args[4],
+			TrustLevel: 5,
+			Transport:  "auto",
+			DateAdded:  time.Now(),
+		}
+		peer.AddPeer(store.DB(), p)
+		fmt.Printf("Peer %s added!\n", os.Args[3])
+
+	case "list":
+		store, _ := storage.Open(cfg.Storage.DataDir, true)
+		defer store.Close()
+
+		peers, _ := peer.ListPeers(store.DB())
+		if len(peers) == 0 {
+			fmt.Println("No peers.")
+			return
+		}
+		for _, p := range peers {
+			fmt.Printf("  %s (%s) - %s [%d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
+		}
+	}
 }
 
-func listPeers() {
+// --- MSG ---
+
+func handleMsgCommand() {
+	if len(os.Args) < 5 {
+		fmt.Println("Usage: bn msg <bm-addr> <subject> <body>")
+		os.Exit(1)
+	}
+
 	cfg, _ := config.Load("boomnode.yaml")
 	store, _ := storage.Open(cfg.Storage.DataDir, true)
 	defer store.Close()
 
-	peers, _ := peer.ListPeers(store.DB())
-	if len(peers) == 0 {
-		fmt.Println("No peers.")
-		return
-	}
-	for _, p := range peers {
-		fmt.Printf("  %s (%s) - %s [%d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
-	}
-}
-
-func sendMessageDirect(tcpAddr, subject, body string) {
-	cfg, _ := config.Load("boomnode.yaml")
 	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
 	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+	to := os.Args[2]
+
+	// Ищем TCP пира
+	peerInfo, err := peer.GetPeer(store.DB(), to)
+	if err != nil {
+		fmt.Printf("Peer %s not found. Add it first:\n  bn peer add %s <name>\n", to, to)
+		os.Exit(1)
+	}
+
+	tcpAddr := peerInfo.TCPHost
+	if tcpAddr == "" {
+		fmt.Printf("No route to %s. Peer is offline.\n", to)
+		fmt.Printf("Message can be sent via relay if available.\n")
+		os.Exit(1)
+	}
 
 	msg := boomex.Message{
 		Type:      boomex.TypeMSG,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
 		From:      from,
-		To:        "",
-		Subject:   subject,
-		Body:      body,
+		To:        to,
+		Subject:   os.Args[3],
+		Body:      os.Args[4],
 		Timestamp: time.Now(),
 	}
 
-	fmt.Printf("Sending message to %s...\n", tcpAddr)
+	fmt.Printf("Sending to %s at %s...\n", to, tcpAddr)
 	if err := boomex.SendMessageToPeer(tcpAddr, from, msg); err != nil {
 		fmt.Printf("Send error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("Message sent!")
+}
+
+// --- EXPORT ---
+
+func handleExportCommand() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: bn export <bm-addr> [output-file]")
+		os.Exit(1)
+	}
+
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir, true)
+	defer store.Close()
+
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+	to := os.Args[2]
+
+	msgs, err := boomex.FetchMessagesForRelay(store.DB(), to)
+	if err != nil || len(msgs) == 0 {
+		fmt.Println("No messages to export.")
+		os.Exit(0)
+	}
+
+	filename := fmt.Sprintf("BoomMail_%s_to_%s.bpack", from, to)
+	if len(os.Args) > 3 {
+		filename = os.Args[3]
+	}
+
+	data, _ := json.Marshal(msgs)
+	os.WriteFile(filename, data, 0644)
+	fmt.Printf("Exported %d messages to %s\n", len(msgs), filename)
+}
+
+// --- IMPORT ---
+
+func handleImportCommand() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: bn import <file.bpack>")
+		os.Exit(1)
+	}
+
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir, false)
+	defer store.Close()
+
+	data, err := os.ReadFile(os.Args[2])
+	if err != nil {
+		fmt.Printf("Error reading file: %v\n", err)
+		os.Exit(1)
+	}
+
+	var msgs []boomex.Message
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		fmt.Printf("Invalid BoomPack file: %v\n", err)
+		os.Exit(1)
+	}
+
+	for _, msg := range msgs {
+		boomex.StoreMessageForRelay(store.DB(), &msg)
+	}
+	fmt.Printf("Imported %d messages.\n", len(msgs))
+}
+
+// --- STATUS ---
+
+func handleStatusCommand() {
+	cfg, _ := config.Load("boomnode.yaml")
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+
+	fmt.Printf("Address:   %s\n", address)
+	fmt.Printf("Node name: %s\n", cfg.Node.Name)
+	fmt.Printf("Mode:      %s\n", cfg.Node.Mode)
+	fmt.Printf("Data dir:  %s\n", cfg.Storage.DataDir)
+}
+
+// --- MESH ---
+
+func handleMeshCommand() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: bn mesh list")
+		fmt.Println("       bn mesh add <bm-addr> <udp_addr>")
+		os.Exit(1)
+	}
+
+	switch os.Args[2] {
+	case "list":
+		fmt.Println("DHT peers are only available when node is running.")
+		fmt.Println("Use: curl http://127.0.0.1:24555/api/mesh")
+	case "add":
+		if len(os.Args) < 5 {
+			fmt.Println("Usage: bn mesh add <bm-addr> <udp_addr:port>")
+			os.Exit(1)
+		}
+		fmt.Printf("To add DHT peer, use API:\n  curl -X POST http://127.0.0.1:24555/api/mesh -H 'Content-Type: application/json' -d '{\"address\":\"%s\",\"udp_addr\":\"%s\"}'\n", os.Args[3], os.Args[4])
+	}
 }
