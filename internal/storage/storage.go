@@ -17,6 +17,7 @@ var (
 	BucketPeers    = []byte("peers")
 	BucketMessages = []byte("messages")
 	BucketOutbox   = []byte("outbox")
+	BucketEchoes   = []byte("echoes")
 )
 
 // Open открывает или создаёт базу данных.
@@ -41,7 +42,7 @@ func Open(dataDir string, readOnly bool) (*Store, error) {
 	// Если не read-only, создаём buckets (иначе не нужно)
 	if !readOnly {
 		err = db.Update(func(tx *bolt.Tx) error {
-			for _, bucket := range [][]byte{BucketPeers, BucketMessages, BucketOutbox} {
+			for _, bucket := range [][]byte{BucketPeers, BucketMessages, BucketOutbox, BucketEchoes} {
 				if _, err := tx.CreateBucketIfNotExists(bucket); err != nil {
 					return fmt.Errorf("cannot create bucket %s: %w", bucket, err)
 				}
