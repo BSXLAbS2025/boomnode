@@ -9,6 +9,7 @@ import (
 	"github.com/BSXLAbS2025/boomnode/internal/boomex"
 	"github.com/BSXLAbS2025/boomnode/internal/config"
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
+	"github.com/BSXLAbS2025/boomnode/internal/mesh"
 	"github.com/BSXLAbS2025/boomnode/internal/peer"
 	"github.com/BSXLAbS2025/boomnode/internal/storage"
 )
@@ -58,7 +59,7 @@ func printUsage() {
 	fmt.Println("BoomNode - BoomNet node")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  run                          Start node (with API on :24555)")
+	fmt.Println("  run                          Start node (BoomEx + BoomMesh + API)")
 	fmt.Println("  peer add <addr> <name> <tcp> Add peer (offline)")
 	fmt.Println("  peer list                    List peers (offline)")
 	fmt.Println("  msg <tcp-addr> <subj> <body> Send direct message")
@@ -68,6 +69,9 @@ func printUsage() {
 	fmt.Println("  GET  http://127.0.0.1:24555/api/peers")
 	fmt.Println("  POST http://127.0.0.1:24555/api/peers")
 	fmt.Println("  POST http://127.0.0.1:24555/api/msg")
+	fmt.Println("  GET  http://127.0.0.1:24555/api/mesh")
+	fmt.Println("  POST http://127.0.0.1:24555/api/export (sneakernet)")
+	fmt.Println("  POST http://127.0.0.1:24555/api/import (sneakernet)")
 }
 
 func runNode() {
@@ -91,15 +95,29 @@ func runNode() {
 	}
 
 	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+	pubKeyStr := fmt.Sprintf("%x", keys.PublicKey)
 
-	fmt.Println("=== BoomNode v0.2.0-alpha ===")
+	fmt.Println("=== BoomNode v0.3.0-alpha ===")
 	fmt.Println("BoomNet: Where Ideas Detonate")
 	fmt.Println()
 	fmt.Printf("Address:   %s\n", address)
 	fmt.Printf("Node name: %s\n", cfg.Node.Name)
 	fmt.Println()
 
-	// Обработчик входящих через BoomEx
+	// --- BoomMesh (P2P-оверлей) ---
+	dht := mesh.NewDHT()
+	meshSrv, err := mesh.NewServer("0.0.0.0:24553", dht, address, pubKeyStr, true)
+	if err != nil {
+		fmt.Printf("BoomMesh error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := meshSrv.Start(); err != nil {
+		fmt.Printf("BoomMesh start error: %v\n", err)
+		os.Exit(1)
+	}
+	defer meshSrv.Stop()
+
+	// --- BoomEx (почтовый протокол) ---
 	handler := func(session *boomex.Session, msg *boomex.Message) {
 		fmt.Printf("=== INCOMING MESSAGE ===\n")
 		fmt.Printf("From:    %s\n", msg.From)
@@ -107,17 +125,21 @@ func runNode() {
 		fmt.Printf("Subject: %s\n", msg.Subject)
 		fmt.Printf("Body:    %s\n", msg.Body)
 		fmt.Printf("=========================\n")
+
+		if msg.To != address && store.DB() != nil {
+			boomex.StoreMessageForRelay(store.DB(), msg)
+			fmt.Printf("Stored relay message: %s -> %s\n", msg.From, msg.To)
+		}
 	}
 
-	// Запускаем BoomEx сервер (TCP 24554)
-	boomexSrv := boomex.NewServer("0.0.0.0:24554", address, handler)
+	boomexSrv := boomex.NewServer("0.0.0.0:24554", address, store.DB(), handler)
 	if err := boomexSrv.Start(); err != nil {
 		fmt.Printf("BoomEx server error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Запускаем API сервер (HTTP 24555)
-	apiSrv := api.NewServer("127.0.0.1:24555", store.DB(), keys, address)
+	// --- API ---
+	apiSrv := api.NewServer("127.0.0.1:24555", store.DB(), keys, address, dht, meshSrv)
 	go func() {
 		if err := apiSrv.Start(); err != nil {
 			fmt.Printf("API server error: %v\n", err)
@@ -126,6 +148,12 @@ func runNode() {
 	}()
 
 	fmt.Println("Node is running. Press Ctrl+C to exit.")
+	fmt.Println()
+	fmt.Println("Services:")
+	fmt.Println("  BoomEx  : TCP 0.0.0.0:24554 (почта)")
+	fmt.Println("  BoomMesh: UDP 0.0.0.0:24553 (P2P-оверлей)")
+	fmt.Println("  API     : HTTP 127.0.0.1:24555 (управление)")
+	fmt.Println("  Sneaker : Export/Import .bpack files")
 	select {}
 }
 
