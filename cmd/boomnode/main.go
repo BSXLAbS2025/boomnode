@@ -10,6 +10,7 @@ import (
 	"github.com/BSXLAbS2025/boomnode/internal/boomex"
 	"github.com/BSXLAbS2025/boomnode/internal/config"
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
+	"github.com/BSXLAbS2025/boomnode/internal/echo"
 	"github.com/BSXLAbS2025/boomnode/internal/mesh"
 	"github.com/BSXLAbS2025/boomnode/internal/peer"
 	"github.com/BSXLAbS2025/boomnode/internal/storage"
@@ -26,18 +27,28 @@ func main() {
 	switch command {
 	case "run":
 		runNode()
+
 	case "peer":
 		handlePeerCommand()
+
 	case "msg":
 		handleMsgCommand()
+
+	case "echo":
+		handleEchoCommand()
+
 	case "export":
 		handleExportCommand()
+
 	case "import":
 		handleImportCommand()
+
 	case "status":
 		handleStatusCommand()
+
 	case "mesh":
 		handleMeshCommand()
+
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -53,11 +64,20 @@ func printUsage() {
 	fmt.Println("  peer add <bm-addr> <name>        Add peer by BM address")
 	fmt.Println("  peer list                        List peers")
 	fmt.Println("  msg <bm-addr> <subject> <body>   Send message to peer")
+	fmt.Println("  msg self <subject> <body>        Send message to yourself")
+	fmt.Println("  msg tcp:<host:port> <subj> <body> Send direct TCP message")
+	fmt.Println("  echo list                        List echo areas")
+	fmt.Println("  echo sub <name> [description]    Subscribe to echo")
+	fmt.Println("  echo post <area> <subject> <body> Post to echo area")
 	fmt.Println("  export <bm-addr> [file]          Export messages for sneakernet")
 	fmt.Println("  import <file>                    Import messages from sneakernet")
 	fmt.Println("  mesh list                        List known DHT peers")
 	fmt.Println("  mesh add <addr> <udp_addr>       Add DHT peer manually")
 }
+
+// ============================================================
+// RUN
+// ============================================================
 
 func runNode() {
 	cfg, err := config.Load("boomnode.yaml")
@@ -130,6 +150,10 @@ func runNode() {
 	select {}
 }
 
+// ============================================================
+// PEER
+// ============================================================
+
 func handlePeerCommand() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: bn peer add <bm-addr> <name>")
@@ -173,6 +197,10 @@ func handlePeerCommand() {
 	}
 }
 
+// ============================================================
+// MSG
+// ============================================================
+
 func handleMsgCommand() {
 	if len(os.Args) < 5 {
 		fmt.Println("Usage: bn msg <bm-addr> <subject> <body>")
@@ -189,20 +217,19 @@ func handleMsgCommand() {
 	var tcpAddr string
 
 	if to == "self" {
-		// Отправка себе
 		tcpAddr = "127.0.0.1:24554"
-		to = from // важно: чтобы сервер понял, что сообщение для него
+		to = from
 	} else if len(to) > 4 && to[:4] == "tcp:" {
-		// Прямая отправка
 		tcpAddr = to[4:]
 	} else {
-		// Поиск пира в БД
 		store, _ := storage.Open(cfg.Storage.DataDir, true)
 		defer store.Close()
 
 		peerInfo, err := peer.GetPeer(store.DB(), to)
 		if err != nil {
 			fmt.Printf("Peer %s not found.\n", to)
+			fmt.Printf("Add it: bn peer add %s <name>\n", to)
+			fmt.Printf("Or send direct: bn msg tcp:<host:port> \"subj\" \"body\"\n")
 			os.Exit(1)
 		}
 		tcpAddr = peerInfo.TCPHost
@@ -228,6 +255,82 @@ func handleMsgCommand() {
 		os.Exit(1)
 	}
 }
+
+// ============================================================
+// ECHO
+// ============================================================
+
+func handleEchoCommand() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: bn echo list")
+		fmt.Println("       bn echo sub <name> [description]")
+		fmt.Println("       bn echo post <area> <subject> <body>")
+		os.Exit(1)
+	}
+
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir, false)
+	defer store.Close()
+
+	switch os.Args[2] {
+	case "list":
+		echoes, err := echo.ListEchoes(store.DB())
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if len(echoes) == 0 {
+			fmt.Println("No echo areas subscribed.")
+			fmt.Println("Subscribe: bn echo sub boombox.general")
+			return
+		}
+		fmt.Println("Echo areas:")
+		for _, e := range echoes {
+			fmt.Printf("  %s — %s (%d msg)\n", e.Name, e.Description, e.Messages)
+		}
+
+	case "sub":
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: bn echo sub <name> [description]")
+			os.Exit(1)
+		}
+		name := os.Args[3]
+		desc := ""
+		if len(os.Args) > 4 {
+			desc = os.Args[4]
+		}
+		if err := echo.Subscribe(store.DB(), name, desc); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		fmt.Printf("Subscribed to %s\n", name)
+
+	case "post":
+		if len(os.Args) < 6 {
+			fmt.Println("Usage: bn echo post <area> <subject> <body>")
+			os.Exit(1)
+		}
+		area := os.Args[3]
+		subject := os.Args[4]
+		body := os.Args[5]
+
+		keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+		from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+
+		if err := echo.PostToEcho(store.DB(), area, from, subject, body); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		fmt.Printf("Posted to %s\n", area)
+
+	default:
+		fmt.Printf("Unknown echo command: %s\n", os.Args[2])
+	}
+}
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 func handleExportCommand() {
 	if len(os.Args) < 3 {
@@ -259,6 +362,10 @@ func handleExportCommand() {
 	fmt.Printf("Exported %d messages to %s\n", len(msgs), filename)
 }
 
+// ============================================================
+// IMPORT
+// ============================================================
+
 func handleImportCommand() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: bn import <file.bpack>")
@@ -287,6 +394,10 @@ func handleImportCommand() {
 	fmt.Printf("Imported %d messages.\n", len(msgs))
 }
 
+// ============================================================
+// STATUS
+// ============================================================
+
 func handleStatusCommand() {
 	cfg, _ := config.Load("boomnode.yaml")
 	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
@@ -297,6 +408,10 @@ func handleStatusCommand() {
 	fmt.Printf("Mode:      %s\n", cfg.Node.Mode)
 	fmt.Printf("Data dir:  %s\n", cfg.Storage.DataDir)
 }
+
+// ============================================================
+// MESH
+// ============================================================
 
 func handleMeshCommand() {
 	if len(os.Args) < 3 {
