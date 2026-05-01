@@ -347,6 +347,13 @@ func handleEchoCommand() {
 			"body":    os.Args[5],
 		})
 
+	case "read":
+    if len(os.Args) < 4 {
+        fmt.Println("Usage: bn echo read <area>")
+        os.Exit(1)
+    }
+    callAPI("GET", "/api/echo/read?area="+os.Args[3], nil)
+		
 	default:
 		fmt.Printf("Unknown echo command: %s\n", os.Args[2])
 	}
