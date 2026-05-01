@@ -1,6 +1,6 @@
 module github.com/BSXLAbS2025/boomnode
 
-go 1.21
+go 1.23
 
 require (
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
