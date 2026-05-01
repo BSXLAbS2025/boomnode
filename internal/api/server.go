@@ -320,6 +320,28 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, webUI)
 }
 
+func (s *Server) handleEchoRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "GET only", 405)
+		return
+	}
+
+	areaName := r.URL.Query().Get("area")
+	if areaName == "" {
+		http.Error(w, "area parameter required", 400)
+		return
+	}
+
+	msgs, err := boomex.FetchMessagesForRelay(s.db, areaName)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(msgs)
+}
+
 const webUI = `<!DOCTYPE html>
 <html lang="ru">
 <head>
