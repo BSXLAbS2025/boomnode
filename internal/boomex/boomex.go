@@ -430,6 +430,70 @@ type serialAddr struct{ name string }
 func (a *serialAddr) Network() string { return "serial" }
 func (a *serialAddr) String() string  { return a.name }
 
+// ============================================================
+// РАДИО-ТРАНСПОРТ
+// ============================================================
+
+// SendMessageViaRadio отправляет сообщение через радио
+func SendMessageViaRadio(myCall string, msg Message) error {
+	cfg := transport.RadioConfig{
+		MyCall:     myCall,
+		Device:     "soundcard",
+		Frequency:  "144.800",
+		Mode:       "afsk",
+		SampleRate: 22050,
+		BitRate:    1200,
+	}
+
+	conn, err := transport.RadioListen(cfg)
+	if err != nil {
+		return fmt.Errorf("radio init failed: %w", err)
+	}
+	defer conn.Close()
+
+	session := NewSession(conn)
+
+	// HELO
+	helo := Message{
+		Type:      TypeHELO,
+		ID:        fmt.Sprintf("radio-%d", time.Now().UnixNano()),
+		From:      myCall,
+		To:        msg.To,
+		Timestamp: time.Now(),
+	}
+	if err := session.Send(helo); err != nil {
+		return fmt.Errorf("send HELO via radio: %w", err)
+	}
+
+	// Ждём ответный HELO
+	response, err := session.Receive()
+	if err != nil {
+		return fmt.Errorf("receive HELO via radio: %w", err)
+	}
+	if response.Type != TypeHELO {
+		return fmt.Errorf("expected HELO, got %s", response.Type)
+	}
+
+	fmt.Printf("Radio handshake with %s successful!\n", response.From)
+
+	// Отправляем сообщение
+	if err := session.Send(msg); err != nil {
+		return fmt.Errorf("send MSG via radio: %w", err)
+	}
+
+	// Ждём ACK
+	ack, err := session.Receive()
+	if err != nil {
+		return fmt.Errorf("receive ACK via radio: %w", err)
+	}
+
+	if ack.Type == TypeACK {
+		fmt.Println("Message delivered via radio!")
+	}
+
+	return nil
+}
+
 // --- Server ---
 
 func NewServer(listenAddr string, myAddress string, db *bolt.DB, relayEnabled bool, whitelist []string, handler MessageHandler) *Server {
