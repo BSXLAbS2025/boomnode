@@ -172,31 +172,42 @@ func handlePeerCommand() {
 		}
 	}
 }
-
 func handleMsgCommand() {
 	if len(os.Args) < 5 {
 		fmt.Println("Usage: bn msg <bm-addr> <subject> <body>")
+		fmt.Println("       bn msg tcp:<host:port> <subject> <body>")
 		os.Exit(1)
 	}
 
 	cfg, _ := config.Load("boomnode.yaml")
-	store, _ := storage.Open(cfg.Storage.DataDir, true)
-	defer store.Close()
-
 	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
 	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 	to := os.Args[2]
 
-	peerInfo, err := peer.GetPeer(store.DB(), to)
-	if err != nil {
-		fmt.Printf("Peer %s not found. Add it first:\n  bn peer add %s <name>\n", to, to)
-		os.Exit(1)
-	}
+	var tcpAddr string
 
-	tcpAddr := peerInfo.TCPHost
-	if tcpAddr == "" {
-		fmt.Printf("No route to %s. Peer is offline.\n", to)
-		os.Exit(1)
+	// Проверяем, прямой TCP или BM-адрес
+	if len(to) > 4 && to[:4] == "tcp:" {
+		// Прямая отправка: bn msg tcp:127.0.0.1:24554 "Hello" "World"
+		tcpAddr = to[4:]
+	} else {
+		// Поиск пира в БД
+		store, _ := storage.Open(cfg.Storage.DataDir, true)
+		defer store.Close()
+
+		peerInfo, err := peer.GetPeer(store.DB(), to)
+		if err != nil {
+			fmt.Printf("Peer %s not found. Add it first:\n  bn peer add %s <name>\n", to, to)
+			fmt.Printf("Or send directly:\n  bn msg tcp:<host:port> \"subject\" \"body\"\n")
+			os.Exit(1)
+		}
+
+		tcpAddr = peerInfo.TCPHost
+		if tcpAddr == "" {
+			fmt.Printf("No route to %s. Peer is offline.\n", to)
+			fmt.Printf("Try direct TCP: bn msg tcp:<host:port> \"subject\" \"body\"\n")
+			os.Exit(1)
+		}
 	}
 
 	msg := boomex.Message{
@@ -209,7 +220,7 @@ func handleMsgCommand() {
 		Timestamp: time.Now(),
 	}
 
-	fmt.Printf("Sending to %s at %s...\n", to, tcpAddr)
+	fmt.Printf("Sending to %s...\n", tcpAddr)
 	if err := boomex.SendMessageToPeer(tcpAddr, from, msg); err != nil {
 		fmt.Printf("Send error: %v\n", err)
 		os.Exit(1)
