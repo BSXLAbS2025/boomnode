@@ -15,7 +15,6 @@ import (
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
 	"github.com/BSXLAbS2025/boomnode/internal/mesh"
 	"github.com/BSXLAbS2025/boomnode/internal/storage"
-	"github.com/BSXLAbS2025/boomnode/internal/transport"
 )
 
 const apiBase = "http://127.0.0.1:24555"
