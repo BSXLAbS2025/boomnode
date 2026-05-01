@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -25,25 +26,18 @@ func main() {
 	switch command {
 	case "run":
 		runNode()
-
 	case "peer":
 		handlePeerCommand()
-
 	case "msg":
 		handleMsgCommand()
-
 	case "export":
 		handleExportCommand()
-
 	case "import":
 		handleImportCommand()
-
 	case "status":
 		handleStatusCommand()
-
 	case "mesh":
 		handleMeshCommand()
-
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -64,8 +58,6 @@ func printUsage() {
 	fmt.Println("  mesh list                        List known DHT peers")
 	fmt.Println("  mesh add <addr> <udp_addr>       Add DHT peer manually")
 }
-
-// --- RUN ---
 
 func runNode() {
 	cfg, err := config.Load("boomnode.yaml")
@@ -98,7 +90,6 @@ func runNode() {
 	fmt.Printf("Mode:      %s\n", cfg.Node.Mode)
 	fmt.Println()
 
-	// BoomMesh
 	dht := mesh.NewDHT()
 	isRelay := cfg.Node.Mode == "relay"
 	meshSrv, err := mesh.NewServer("0.0.0.0:24553", dht, address, pubKeyStr, isRelay)
@@ -112,7 +103,6 @@ func runNode() {
 	}
 	defer meshSrv.Stop()
 
-	// BoomEx
 	handler := func(session *boomex.Session, msg *boomex.Message) {
 		fmt.Printf("=== INCOMING MESSAGE ===\nFrom: %s\nSubject: %s\nBody: %s\n=========================\n", msg.From, msg.Subject, msg.Body)
 		if msg.To != address && store.DB() != nil {
@@ -127,7 +117,6 @@ func runNode() {
 		os.Exit(1)
 	}
 
-	// API
 	apiSrv := api.NewServer("127.0.0.1:24555", store.DB(), keys, address, dht, meshSrv)
 	go func() {
 		if err := apiSrv.Start(); err != nil {
@@ -140,8 +129,6 @@ func runNode() {
 	fmt.Println("Services: BoomEx :24554 | BoomMesh :24553 | API :24555")
 	select {}
 }
-
-// --- PEER ---
 
 func handlePeerCommand() {
 	if len(os.Args) < 3 {
@@ -186,8 +173,6 @@ func handlePeerCommand() {
 	}
 }
 
-// --- MSG ---
-
 func handleMsgCommand() {
 	if len(os.Args) < 5 {
 		fmt.Println("Usage: bn msg <bm-addr> <subject> <body>")
@@ -202,7 +187,6 @@ func handleMsgCommand() {
 	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 	to := os.Args[2]
 
-	// Ищем TCP пира
 	peerInfo, err := peer.GetPeer(store.DB(), to)
 	if err != nil {
 		fmt.Printf("Peer %s not found. Add it first:\n  bn peer add %s <name>\n", to, to)
@@ -212,7 +196,6 @@ func handleMsgCommand() {
 	tcpAddr := peerInfo.TCPHost
 	if tcpAddr == "" {
 		fmt.Printf("No route to %s. Peer is offline.\n", to)
-		fmt.Printf("Message can be sent via relay if available.\n")
 		os.Exit(1)
 	}
 
@@ -232,8 +215,6 @@ func handleMsgCommand() {
 		os.Exit(1)
 	}
 }
-
-// --- EXPORT ---
 
 func handleExportCommand() {
 	if len(os.Args) < 3 {
@@ -265,8 +246,6 @@ func handleExportCommand() {
 	fmt.Printf("Exported %d messages to %s\n", len(msgs), filename)
 }
 
-// --- IMPORT ---
-
 func handleImportCommand() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: bn import <file.bpack>")
@@ -295,8 +274,6 @@ func handleImportCommand() {
 	fmt.Printf("Imported %d messages.\n", len(msgs))
 }
 
-// --- STATUS ---
-
 func handleStatusCommand() {
 	cfg, _ := config.Load("boomnode.yaml")
 	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
@@ -307,8 +284,6 @@ func handleStatusCommand() {
 	fmt.Printf("Mode:      %s\n", cfg.Node.Mode)
 	fmt.Printf("Data dir:  %s\n", cfg.Storage.DataDir)
 }
-
-// --- MESH ---
 
 func handleMeshCommand() {
 	if len(os.Args) < 3 {
