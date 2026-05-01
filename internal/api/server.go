@@ -44,6 +44,7 @@ func (s *Server) Start() error {
 	http.HandleFunc("/api/import", s.handleImport)
 	http.HandleFunc("/api/echoes", s.handleEchoes)
 	http.HandleFunc("/api/echo", s.handleEchoPost)
+	http.HandleFunc("/api/echo/read", s.handleEchoRead)
 	http.HandleFunc("/", s.handleWeb)
 
 	fmt.Printf("API server started on %s\n", s.addr)
