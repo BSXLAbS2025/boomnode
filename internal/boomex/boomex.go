@@ -10,6 +10,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 	"github.com/tarm/serial"
+	"github.com/BSXLAbS2025/boomnode/internal/transport"
 )
 
 // --- Типы сообщений ---
