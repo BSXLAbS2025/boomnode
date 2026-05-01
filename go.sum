@@ -1,5 +1,5 @@
 github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07 h1:UyzmZLoiDWMRaVhlDU4MBLxftkNUWbNCz9BqF9D94E=
-github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07/go.mod h1:kDXzergiv9cbyO7IOYJZWg1U88JhDg3PB6klq9Hg2pA=
+github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07/go.mod h1:UyzmZLoiDWMRaVhlDU4MBLxftkNUWbNCz9BqF9D94E=
 go.etcd.io/bbolt v1.3.8 h1:lHh/QazeM4e7oIfqoFBB7PY9qMdNkndBP2GaYclQ0K4=
 go.etcd.io/bbolt v1.3.8/go.mod h1:N9Mkw9X8x5fupy0IKsmuqVtoGDyxsaDlbk4Rd05IAQw=
 golang.org/x/crypto v0.24.0 h1:mnl8DM0o13XBIkxL1Wmx0HqWKoNWc4JhHqekA3wjG0=
