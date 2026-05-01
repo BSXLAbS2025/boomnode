@@ -1,6 +1,12 @@
 node:
   name: "BSX Station"
   geo: "RU"
+  mode: "client"  # "client" или "relay"
 
 storage:
   data_dir: "./data"
+
+relay:
+  enabled: true           # Принимать сообщения для других?
+  whitelist: []           # Пустой = для всех, иначе список BM-адресов
+  max_storage_mb: 100     # Максимальный размер хранимых чужих сообщений
