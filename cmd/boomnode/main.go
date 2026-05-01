@@ -47,6 +47,8 @@ func main() {
 		handleMeshCommand()
 	case "dial":
     	handleDialCommand()
+	case "radio":
+    	handleRadioCommand()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -71,6 +73,7 @@ func printUsage() {
 	fmt.Println("  export <bm-addr> [file]          Export messages for sneakernet")
 	fmt.Println("  import <file>                    Import messages from sneakernet")
 	fmt.Println("  dial <device> <baud> <phone> <msg-to> <subj> <body>  Send via dial-up modem")
+	fmt.Println("  radio <msg-to> <subj> <body>  Send message via radio (soundcard)")
 	fmt.Println("  mesh list                        List known DHT peers")
 }
 
@@ -123,8 +126,37 @@ func prettyPrintJSON(raw string) {
 	fmt.Println(string(formatted))
 }
 
+func handleRadioCommand() {
+	if len(os.Args) < 5 {
+		fmt.Println("Usage: bn radio <msg-to> <subject> <body>")
+		fmt.Println("Example: bn radio BM-RU-FRIEND \"Hello\" \"Radio test\"")
+		os.Exit(1)
+	}
+
+	cfg, _ := config.Load("boomnode.yaml")
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+
+	msg := boomex.Message{
+		Type:      boomex.TypeMSG,
+		ID:        fmt.Sprintf("radio-%d", time.Now().UnixNano()),
+		From:      from,
+		To:        os.Args[2],
+		Subject:   os.Args[3],
+		Body:      os.Args[4],
+		Timestamp: time.Now(),
+	}
+
+	fmt.Println("=== RADIO TRANSMISSION ===")
+	if err := boomex.SendMessageViaRadio(from, msg); err != nil {
+		fmt.Printf("Radio error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Radio transmission completed.")
+}
+
 // downloadFile скачивает файл через API
-func downloadFile(method, path string, body interface{}, filename string) {
+downloadFile(method, path string, body interface{}, filename string) {
 	var bodyReader io.Reader
 	if body != nil {
 		data, _ := json.Marshal(body)
