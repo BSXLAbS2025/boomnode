@@ -164,11 +164,37 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 		return fmt.Errorf("handshake failed: %w", err)
 	}
 
+	// Auto FETCH: запрашиваем накопленные сообщения
+	fetchMsg := Message{
+		Type:      TypeFETCH,
+		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		From:      myAddress,
+		To:        msg.To,
+		Timestamp: time.Now(),
+	}
+	if err := session.Send(fetchMsg); err != nil {
+		return fmt.Errorf("send FETCH error: %w", err)
+	}
+
+	// Принимаем накопленные сообщения
+	for {
+		response, err := session.Receive()
+		if err != nil {
+			break
+		}
+		if response.Type == TypeMSG && response.Subject == "NO_MAIL" {
+			break
+		}
+		if response.Type == TypeMSG {
+			fmt.Printf("=== FETCHED MESSAGE ===\nFrom: %s\nSubject: %s\nBody: %s\n=========================\n", response.From, response.Subject, response.Body)
+		}
+	}
+
+	// Отправляем основное сообщение
 	if err := session.Send(msg); err != nil {
 		return fmt.Errorf("send message error: %w", err)
 	}
 
-	// Читаем ответ — может быть ACK, MSG, или RELAY_*
 	response, err := session.Receive()
 	if err != nil {
 		return fmt.Errorf("receive response error: %w", err)
@@ -178,11 +204,9 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 	case TypeACK:
 		fmt.Printf("Message delivered and acknowledged by %s\n", tcpAddr)
 	case TypeMSG:
-		// Сервер прислал сообщение вместо ACK (например, relay-статус)
 		if response.Subject == "RELAY_ERROR" || response.Subject == "RELAY_DISABLED" || response.Subject == "RELAY_DENIED" {
 			return fmt.Errorf("relay failed: %s - %s", response.Subject, response.Body)
 		}
-		// Иначе просто входящее сообщение — обрабатываем
 		fmt.Printf("=== INCOMING MESSAGE ===\nFrom: %s\nSubject: %s\nBody: %s\n=========================\n", response.From, response.Subject, response.Body)
 	default:
 		return fmt.Errorf("unexpected response type: %s", response.Type)
