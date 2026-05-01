@@ -6,7 +6,6 @@ import (
 	"io"
 	"math"
 	"os/exec"
-	"time"
 )
 
 // RadioConfig — конфигурация радио
