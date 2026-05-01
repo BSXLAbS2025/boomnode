@@ -172,10 +172,12 @@ func handlePeerCommand() {
 		}
 	}
 }
+
 func handleMsgCommand() {
 	if len(os.Args) < 5 {
 		fmt.Println("Usage: bn msg <bm-addr> <subject> <body>")
 		fmt.Println("       bn msg tcp:<host:port> <subject> <body>")
+		fmt.Println("       bn msg self <subject> <body>")
 		os.Exit(1)
 	}
 
@@ -186,9 +188,12 @@ func handleMsgCommand() {
 
 	var tcpAddr string
 
-	// Проверяем, прямой TCP или BM-адрес
-	if len(to) > 4 && to[:4] == "tcp:" {
-		// Прямая отправка: bn msg tcp:127.0.0.1:24554 "Hello" "World"
+	if to == "self" {
+		// Отправка себе
+		tcpAddr = "127.0.0.1:24554"
+		to = from // важно: чтобы сервер понял, что сообщение для него
+	} else if len(to) > 4 && to[:4] == "tcp:" {
+		// Прямая отправка
 		tcpAddr = to[4:]
 	} else {
 		// Поиск пира в БД
@@ -197,15 +202,12 @@ func handleMsgCommand() {
 
 		peerInfo, err := peer.GetPeer(store.DB(), to)
 		if err != nil {
-			fmt.Printf("Peer %s not found. Add it first:\n  bn peer add %s <name>\n", to, to)
-			fmt.Printf("Or send directly:\n  bn msg tcp:<host:port> \"subject\" \"body\"\n")
+			fmt.Printf("Peer %s not found.\n", to)
 			os.Exit(1)
 		}
-
 		tcpAddr = peerInfo.TCPHost
 		if tcpAddr == "" {
-			fmt.Printf("No route to %s. Peer is offline.\n", to)
-			fmt.Printf("Try direct TCP: bn msg tcp:<host:port> \"subject\" \"body\"\n")
+			fmt.Printf("No route to %s.\n", to)
 			os.Exit(1)
 		}
 	}
