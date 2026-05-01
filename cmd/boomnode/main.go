@@ -287,8 +287,20 @@ func handleMsgCommand() {
 		os.Exit(1)
 	}
 
-	cfg, _ := config.Load("boomnode.yaml")
-	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	// Загружаем конфиг
+	cfg, err := config.Load("boomnode.yaml")
+	if err != nil {
+		fmt.Printf("Config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Пытаемся загрузить ключи
+	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
+	if err != nil {
+		fmt.Println("Keys not found. Please run './bn run' first to initialize the node.")
+		os.Exit(1)
+	}
+
 	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 	to := os.Args[2]
 
