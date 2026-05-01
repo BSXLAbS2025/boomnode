@@ -168,16 +168,26 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 		return fmt.Errorf("send message error: %w", err)
 	}
 
-	ack, err := session.Receive()
+	// Читаем ответ — может быть ACK, MSG, или RELAY_*
+	response, err := session.Receive()
 	if err != nil {
-		return fmt.Errorf("receive ACK error: %w", err)
+		return fmt.Errorf("receive response error: %w", err)
 	}
 
-	if ack.Type != TypeACK {
-		return fmt.Errorf("expected ACK, got %s", ack.Type)
+	switch response.Type {
+	case TypeACK:
+		fmt.Printf("Message delivered and acknowledged by %s\n", tcpAddr)
+	case TypeMSG:
+		// Сервер прислал сообщение вместо ACK (например, relay-статус)
+		if response.Subject == "RELAY_ERROR" || response.Subject == "RELAY_DISABLED" || response.Subject == "RELAY_DENIED" {
+			return fmt.Errorf("relay failed: %s - %s", response.Subject, response.Body)
+		}
+		// Иначе просто входящее сообщение — обрабатываем
+		fmt.Printf("=== INCOMING MESSAGE ===\nFrom: %s\nSubject: %s\nBody: %s\n=========================\n", response.From, response.Subject, response.Body)
+	default:
+		return fmt.Errorf("unexpected response type: %s", response.Type)
 	}
 
-	fmt.Printf("Message delivered and acknowledged by %s\n", msg.To)
 	return nil
 }
 
