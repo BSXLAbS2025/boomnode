@@ -11,6 +11,7 @@ import (
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
 	"github.com/BSXLAbS2025/boomnode/internal/mesh"
 	"github.com/BSXLAbS2025/boomnode/internal/peer"
+	"github.com/BSXLAbS2025/boomnode/internal/echo"
 	bolt "go.etcd.io/bbolt"
 )
 
