@@ -41,6 +41,8 @@ func (s *Server) Start() error {
 	http.HandleFunc("/api/mesh", s.handleMesh)
 	http.HandleFunc("/api/export", s.handleExport)
 	http.HandleFunc("/api/import", s.handleImport)
+	http.HandleFunc("/api/echoes", s.handleEchoes)
+	http.HandleFunc("/api/echo", s.handleEchoPost)
 	http.HandleFunc("/", s.handleWeb)
 
 	fmt.Printf("API server started on %s\n", s.addr)
@@ -231,6 +233,57 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=BoomMail_%s_to_%s_%d.bpack", s.myAddress, req.To, time.Now().Unix()))
 	w.Write(data)
+}
+
+func (s *Server) handleEchoes(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		echoes, err := echo.ListEchoes(s.db)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(echoes)
+		return
+	}
+	if r.Method == "POST" {
+		var req struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		if err := echo.Subscribe(s.db, req.Name, req.Description); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		fmt.Fprintf(w, "Subscribed to %s\n", req.Name)
+		return
+	}
+	http.Error(w, "method not allowed", 405)
+}
+
+func (s *Server) handleEchoPost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST only", 405)
+		return
+	}
+	var req struct {
+		Area    string `json:"area"`
+		Subject string `json:"subject"`
+		Body    string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	if err := echo.PostToEcho(s.db, req.Area, s.myAddress, req.Subject, req.Body); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	fmt.Fprintf(w, "Posted to %s\n", req.Area)
 }
 
 func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
