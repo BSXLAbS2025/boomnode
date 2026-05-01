@@ -61,10 +61,33 @@ func PostToEcho(db *bolt.DB, areaName string, from string, subject string, body 
 		Type:      boomex.TypeMSG,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
 		From:      from,
-		To:        areaName, // в поле To — имя эхи
+		To:        areaName,
 		Subject:   fmt.Sprintf("[%s] %s", areaName, subject),
 		Body:      body,
 		Timestamp: time.Now(),
 	}
-	return boomex.StoreMessageForRelay(db, &msg)
+
+	// Сохраняем сообщение
+	if err := boomex.StoreMessageForRelay(db, &msg); err != nil {
+		return err
+	}
+
+	// Обновляем счётчик сообщений в эхе
+	return db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("echoes"))
+		if b == nil {
+			return fmt.Errorf("bucket echoes not found")
+		}
+		data := b.Get([]byte(areaName))
+		if data == nil {
+			return fmt.Errorf("echo area %s not found", areaName)
+		}
+		var area EchoArea
+		if err := json.Unmarshal(data, &area); err != nil {
+			return err
+		}
+		area.Messages++
+		newData, _ := json.Marshal(area)
+		return b.Put([]byte(areaName), newData)
+	})
 }
