@@ -132,7 +132,8 @@ func runNode() {
 		}
 	}
 
-	boomexSrv := boomex.NewServer("0.0.0.0:24554", address, store.DB(), handler)
+	isRelay := cfg.Node.Mode == "relay"
+	boomexSrv := boomex.NewServer("0.0.0.0:24554", address, store.DB(), isRelay, cfg.Relay.Whitelist, handler)
 	if err := boomexSrv.Start(); err != nil {
 		fmt.Printf("BoomEx server error: %v\n", err)
 		os.Exit(1)
