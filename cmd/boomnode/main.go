@@ -64,14 +64,17 @@ func printUsage() {
 	fmt.Println("  echo list                        List echo areas")
 	fmt.Println("  echo sub <name> [description]    Subscribe to echo")
 	fmt.Println("  echo post <area> <subject> <body> Post to echo area")
+	fmt.Println("  echo read <area>                 Read messages from echo")
 	fmt.Println("  export <bm-addr> [file]          Export messages for sneakernet")
 	fmt.Println("  import <file>                    Import messages from sneakernet")
 	fmt.Println("  mesh list                        List known DHT peers")
 }
 
-// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ API ---
+// ============================================================
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+// ============================================================
 
-// callAPI отправляет HTTP-запрос к API и выводит ответ
+// callAPI отправляет запрос к API и выводит форматированный ответ
 func callAPI(method, path string, body interface{}) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -95,7 +98,25 @@ func callAPI(method, path string, body interface{}) {
 	defer resp.Body.Close()
 
 	result, _ := io.ReadAll(resp.Body)
-	fmt.Println(string(result))
+
+	// Пробуем отформатировать JSON
+	prettyPrintJSON(string(result))
+}
+
+// prettyPrintJSON форматирует JSON для читаемого вывода
+func prettyPrintJSON(raw string) {
+	var data interface{}
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		// Не JSON — выводим как есть
+		fmt.Print(raw)
+		return
+	}
+	formatted, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		fmt.Print(raw)
+		return
+	}
+	fmt.Println(string(formatted))
 }
 
 // downloadFile скачивает файл через API
@@ -137,8 +158,7 @@ func uploadFile(path, filename string) {
 	defer file.Close()
 
 	var buf bytes.Buffer
-	writer := io.MultiWriter(&buf)
-	io.Copy(writer, file)
+	io.Copy(&buf, file)
 
 	req, _ := http.NewRequest("POST", apiBase+path, &buf)
 	req.Header.Set("Content-Type", "application/octet-stream")
@@ -151,10 +171,12 @@ func uploadFile(path, filename string) {
 	defer resp.Body.Close()
 
 	result, _ := io.ReadAll(resp.Body)
-	fmt.Println(string(result))
+	fmt.Print(string(result))
 }
 
-// --- RUN ---
+// ============================================================
+// RUN
+// ============================================================
 
 func runNode() {
 	cfg, err := config.Load("boomnode.yaml")
@@ -227,7 +249,9 @@ func runNode() {
 	select {}
 }
 
-// --- PEER (через API) ---
+// ============================================================
+// PEER
+// ============================================================
 
 func handlePeerCommand() {
 	if len(os.Args) < 3 {
@@ -251,7 +275,9 @@ func handlePeerCommand() {
 	}
 }
 
-// --- MSG (прямое соединение, без БД) ---
+// ============================================================
+// MSG
+// ============================================================
 
 func handleMsgCommand() {
 	if len(os.Args) < 5 {
@@ -274,20 +300,9 @@ func handleMsgCommand() {
 	} else if len(to) > 4 && to[:4] == "tcp:" {
 		tcpAddr = to[4:]
 	} else {
-		// Ищем пира через API
-		req, _ := http.NewRequest("GET", apiBase+"/api/peers", nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			fmt.Println("Node not running. Start it first: ./bn run")
-			os.Exit(1)
-		}
-		defer resp.Body.Close()
-
-		// Простой поиск в ответе (можно улучшить)
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Printf("Peer %s not found in local DB. Use:\n  bn msg tcp:<host:port> \"%s\" \"%s\"\n", to, os.Args[3], os.Args[4])
+		fmt.Printf("Peer %s not found in local DB.\n", to)
+		fmt.Printf("Use direct TCP: bn msg tcp:<host:port> \"%s\" \"%s\"\n", os.Args[3], os.Args[4])
 		fmt.Printf("Or add peer first:\n  bn peer add %s <name>\n", to)
-		_ = body
 		os.Exit(1)
 	}
 
@@ -308,13 +323,16 @@ func handleMsgCommand() {
 	}
 }
 
-// --- ECHO (через API) ---
+// ============================================================
+// ECHO
+// ============================================================
 
 func handleEchoCommand() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: bn echo list")
 		fmt.Println("       bn echo sub <name> [description]")
 		fmt.Println("       bn echo post <area> <subject> <body>")
+		fmt.Println("       bn echo read <area>")
 		os.Exit(1)
 	}
 
@@ -348,18 +366,20 @@ func handleEchoCommand() {
 		})
 
 	case "read":
-    if len(os.Args) < 4 {
-        fmt.Println("Usage: bn echo read <area>")
-        os.Exit(1)
-    }
-    callAPI("GET", "/api/echo/read?area="+os.Args[3], nil)
-		
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: bn echo read <area>")
+			os.Exit(1)
+		}
+		callAPI("GET", "/api/echo/read?area="+os.Args[3], nil)
+
 	default:
 		fmt.Printf("Unknown echo command: %s\n", os.Args[2])
 	}
 }
 
-// --- EXPORT (через API) ---
+// ============================================================
+// EXPORT
+// ============================================================
 
 func handleExportCommand() {
 	if len(os.Args) < 3 {
@@ -376,7 +396,9 @@ func handleExportCommand() {
 	downloadFile("POST", "/api/export", map[string]string{"to": to}, filename)
 }
 
-// --- IMPORT (через API) ---
+// ============================================================
+// IMPORT
+// ============================================================
 
 func handleImportCommand() {
 	if len(os.Args) < 3 {
@@ -387,27 +409,45 @@ func handleImportCommand() {
 	uploadFile("/api/import", os.Args[2])
 }
 
-// --- STATUS (локально, без БД) ---
+// ============================================================
+// STATUS (исправлено!)
+// ============================================================
 
 func handleStatusCommand() {
-	cfg, _ := config.Load("boomnode.yaml")
-	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
+	// Сначала пробуем получить статус через API (сервер запущен)
+	resp, err := http.Get(apiBase + "/api/status")
+	if err == nil {
+		defer resp.Body.Close()
+		result, _ := io.ReadAll(resp.Body)
+		prettyPrintJSON(string(result))
+		return
+	}
+
+	// Сервер не запущен — читаем локальные данные
+	cfg, err := config.Load("boomnode.yaml")
 	if err != nil {
-		fmt.Println("Node not initialised. Run './bn run' first.")
+		fmt.Println("Config not found. Run './bn run' first.")
 		os.Exit(1)
 	}
+
+	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
+	if err != nil {
+		fmt.Println("Keys not found. Run './bn run' first.")
+		os.Exit(1)
+	}
+
 	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 
+	fmt.Println("Node is OFFLINE")
 	fmt.Printf("Address:   %s\n", address)
 	fmt.Printf("Node name: %s\n", cfg.Node.Name)
 	fmt.Printf("Mode:      %s\n", cfg.Node.Mode)
 	fmt.Printf("Data dir:  %s\n", cfg.Storage.DataDir)
-
-	// Пробуем получить статус через API
-	callAPI("GET", "/api/status", nil)
 }
 
-// --- MESH (через API) ---
+// ============================================================
+// MESH
+// ============================================================
 
 func handleMeshCommand() {
 	if len(os.Args) < 3 {
