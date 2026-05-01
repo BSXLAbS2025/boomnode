@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -10,11 +13,11 @@ import (
 	"github.com/BSXLAbS2025/boomnode/internal/boomex"
 	"github.com/BSXLAbS2025/boomnode/internal/config"
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
-	"github.com/BSXLAbS2025/boomnode/internal/echo"
 	"github.com/BSXLAbS2025/boomnode/internal/mesh"
-	"github.com/BSXLAbS2025/boomnode/internal/peer"
 	"github.com/BSXLAbS2025/boomnode/internal/storage"
 )
+
+const apiBase = "http://127.0.0.1:24555"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -27,28 +30,20 @@ func main() {
 	switch command {
 	case "run":
 		runNode()
-
 	case "peer":
 		handlePeerCommand()
-
 	case "msg":
 		handleMsgCommand()
-
 	case "echo":
 		handleEchoCommand()
-
 	case "export":
 		handleExportCommand()
-
 	case "import":
 		handleImportCommand()
-
 	case "status":
 		handleStatusCommand()
-
 	case "mesh":
 		handleMeshCommand()
-
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -72,12 +67,94 @@ func printUsage() {
 	fmt.Println("  export <bm-addr> [file]          Export messages for sneakernet")
 	fmt.Println("  import <file>                    Import messages from sneakernet")
 	fmt.Println("  mesh list                        List known DHT peers")
-	fmt.Println("  mesh add <addr> <udp_addr>       Add DHT peer manually")
 }
 
-// ============================================================
-// RUN
-// ============================================================
+// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ API ---
+
+// callAPI отправляет HTTP-запрос к API и выводит ответ
+func callAPI(method, path string, body interface{}) {
+	var bodyReader io.Reader
+	if body != nil {
+		data, _ := json.Marshal(body)
+		bodyReader = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequest(method, apiBase+path, bodyReader)
+	if err != nil {
+		fmt.Printf("Request error: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("API error: %v (is the node running?)\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	result, _ := io.ReadAll(resp.Body)
+	fmt.Println(string(result))
+}
+
+// downloadFile скачивает файл через API
+func downloadFile(method, path string, body interface{}, filename string) {
+	var bodyReader io.Reader
+	if body != nil {
+		data, _ := json.Marshal(body)
+		bodyReader = bytes.NewReader(data)
+	}
+
+	req, _ := http.NewRequest(method, apiBase+path, bodyReader)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Printf("API error: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		result, _ := io.ReadAll(resp.Body)
+		fmt.Println(string(result))
+		os.Exit(1)
+	}
+
+	data, _ := io.ReadAll(resp.Body)
+	os.WriteFile(filename, data, 0644)
+	fmt.Printf("Downloaded to %s\n", filename)
+}
+
+// uploadFile загружает файл через API
+func uploadFile(path, filename string) {
+	file, err := os.Open(filename)
+	if err != nil {
+		fmt.Printf("File error: %v\n", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	var buf bytes.Buffer
+	writer := io.MultiWriter(&buf)
+	io.Copy(writer, file)
+
+	req, _ := http.NewRequest("POST", apiBase+path, &buf)
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Printf("API error: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	result, _ := io.ReadAll(resp.Body)
+	fmt.Println(string(result))
+}
+
+// --- RUN ---
 
 func runNode() {
 	cfg, err := config.Load("boomnode.yaml")
@@ -150,9 +227,7 @@ func runNode() {
 	select {}
 }
 
-// ============================================================
-// PEER
-// ============================================================
+// --- PEER (через API) ---
 
 func handlePeerCommand() {
 	if len(os.Args) < 3 {
@@ -161,45 +236,22 @@ func handlePeerCommand() {
 		os.Exit(1)
 	}
 
-	cfg, _ := config.Load("boomnode.yaml")
-
 	switch os.Args[2] {
 	case "add":
 		if len(os.Args) < 5 {
 			fmt.Println("Usage: bn peer add <bm-addr> <name>")
 			os.Exit(1)
 		}
-		store, _ := storage.Open(cfg.Storage.DataDir, false)
-		defer store.Close()
-
-		p := peer.PeerInfo{
-			Address:    os.Args[3],
-			Name:       os.Args[4],
-			TrustLevel: 5,
-			Transport:  "auto",
-			DateAdded:  time.Now(),
-		}
-		peer.AddPeer(store.DB(), p)
-		fmt.Printf("Peer %s added!\n", os.Args[3])
-
+		callAPI("POST", "/api/peers", map[string]string{
+			"address": os.Args[3],
+			"name":    os.Args[4],
+		})
 	case "list":
-		store, _ := storage.Open(cfg.Storage.DataDir, true)
-		defer store.Close()
-
-		peers, _ := peer.ListPeers(store.DB())
-		if len(peers) == 0 {
-			fmt.Println("No peers.")
-			return
-		}
-		for _, p := range peers {
-			fmt.Printf("  %s (%s) - %s [%d]\n", p.Address, p.Name, p.TCPHost, p.TrustLevel)
-		}
+		callAPI("GET", "/api/peers", nil)
 	}
 }
 
-// ============================================================
-// MSG
-// ============================================================
+// --- MSG (прямое соединение, без БД) ---
 
 func handleMsgCommand() {
 	if len(os.Args) < 5 {
@@ -222,21 +274,21 @@ func handleMsgCommand() {
 	} else if len(to) > 4 && to[:4] == "tcp:" {
 		tcpAddr = to[4:]
 	} else {
-		store, _ := storage.Open(cfg.Storage.DataDir, true)
-		defer store.Close()
-
-		peerInfo, err := peer.GetPeer(store.DB(), to)
+		// Ищем пира через API
+		req, _ := http.NewRequest("GET", apiBase+"/api/peers", nil)
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			fmt.Printf("Peer %s not found.\n", to)
-			fmt.Printf("Add it: bn peer add %s <name>\n", to)
-			fmt.Printf("Or send direct: bn msg tcp:<host:port> \"subj\" \"body\"\n")
+			fmt.Println("Node not running. Start it first: ./bn run")
 			os.Exit(1)
 		}
-		tcpAddr = peerInfo.TCPHost
-		if tcpAddr == "" {
-			fmt.Printf("No route to %s.\n", to)
-			os.Exit(1)
-		}
+		defer resp.Body.Close()
+
+		// Простой поиск в ответе (можно улучшить)
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("Peer %s not found in local DB. Use:\n  bn msg tcp:<host:port> \"%s\" \"%s\"\n", to, os.Args[3], os.Args[4])
+		fmt.Printf("Or add peer first:\n  bn peer add %s <name>\n", to)
+		_ = body
+		os.Exit(1)
 	}
 
 	msg := boomex.Message{
@@ -256,9 +308,7 @@ func handleMsgCommand() {
 	}
 }
 
-// ============================================================
-// ECHO
-// ============================================================
+// --- ECHO (через API) ---
 
 func handleEchoCommand() {
 	if len(os.Args) < 3 {
@@ -268,69 +318,41 @@ func handleEchoCommand() {
 		os.Exit(1)
 	}
 
-	cfg, _ := config.Load("boomnode.yaml")
-	store, _ := storage.Open(cfg.Storage.DataDir, false)
-	defer store.Close()
-
 	switch os.Args[2] {
 	case "list":
-		echoes, err := echo.ListEchoes(store.DB())
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
-		}
-		if len(echoes) == 0 {
-			fmt.Println("No echo areas subscribed.")
-			fmt.Println("Subscribe: bn echo sub boombox.general")
-			return
-		}
-		fmt.Println("Echo areas:")
-		for _, e := range echoes {
-			fmt.Printf("  %s — %s (%d msg)\n", e.Name, e.Description, e.Messages)
-		}
+		callAPI("GET", "/api/echoes", nil)
 
 	case "sub":
 		if len(os.Args) < 4 {
 			fmt.Println("Usage: bn echo sub <name> [description]")
 			os.Exit(1)
 		}
-		name := os.Args[3]
 		desc := ""
 		if len(os.Args) > 4 {
 			desc = os.Args[4]
 		}
-		if err := echo.Subscribe(store.DB(), name, desc); err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
-		}
-		fmt.Printf("Subscribed to %s\n", name)
+		callAPI("POST", "/api/echoes", map[string]string{
+			"name":        os.Args[3],
+			"description": desc,
+		})
 
 	case "post":
 		if len(os.Args) < 6 {
 			fmt.Println("Usage: bn echo post <area> <subject> <body>")
 			os.Exit(1)
 		}
-		area := os.Args[3]
-		subject := os.Args[4]
-		body := os.Args[5]
-
-		keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
-		from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
-
-		if err := echo.PostToEcho(store.DB(), area, from, subject, body); err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
-		}
-		fmt.Printf("Posted to %s\n", area)
+		callAPI("POST", "/api/echo", map[string]string{
+			"area":    os.Args[3],
+			"subject": os.Args[4],
+			"body":    os.Args[5],
+		})
 
 	default:
 		fmt.Printf("Unknown echo command: %s\n", os.Args[2])
 	}
 }
 
-// ============================================================
-// EXPORT
-// ============================================================
+// --- EXPORT (через API) ---
 
 func handleExportCommand() {
 	if len(os.Args) < 3 {
@@ -338,33 +360,16 @@ func handleExportCommand() {
 		os.Exit(1)
 	}
 
-	cfg, _ := config.Load("boomnode.yaml")
-	store, _ := storage.Open(cfg.Storage.DataDir, true)
-	defer store.Close()
-
-	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
-	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 	to := os.Args[2]
-
-	msgs, err := boomex.FetchMessagesForRelay(store.DB(), to)
-	if err != nil || len(msgs) == 0 {
-		fmt.Println("No messages to export.")
-		os.Exit(0)
-	}
-
-	filename := fmt.Sprintf("BoomMail_%s_to_%s.bpack", from, to)
+	filename := fmt.Sprintf("BoomMail_to_%s.bpack", to)
 	if len(os.Args) > 3 {
 		filename = os.Args[3]
 	}
 
-	data, _ := json.Marshal(msgs)
-	os.WriteFile(filename, data, 0644)
-	fmt.Printf("Exported %d messages to %s\n", len(msgs), filename)
+	downloadFile("POST", "/api/export", map[string]string{"to": to}, filename)
 }
 
-// ============================================================
-// IMPORT
-// ============================================================
+// --- IMPORT (через API) ---
 
 func handleImportCommand() {
 	if len(os.Args) < 3 {
@@ -372,63 +377,38 @@ func handleImportCommand() {
 		os.Exit(1)
 	}
 
-	cfg, _ := config.Load("boomnode.yaml")
-	store, _ := storage.Open(cfg.Storage.DataDir, false)
-	defer store.Close()
-
-	data, err := os.ReadFile(os.Args[2])
-	if err != nil {
-		fmt.Printf("Error reading file: %v\n", err)
-		os.Exit(1)
-	}
-
-	var msgs []boomex.Message
-	if err := json.Unmarshal(data, &msgs); err != nil {
-		fmt.Printf("Invalid BoomPack file: %v\n", err)
-		os.Exit(1)
-	}
-
-	for _, msg := range msgs {
-		boomex.StoreMessageForRelay(store.DB(), &msg)
-	}
-	fmt.Printf("Imported %d messages.\n", len(msgs))
+	uploadFile("/api/import", os.Args[2])
 }
 
-// ============================================================
-// STATUS
-// ============================================================
+// --- STATUS (локально, без БД) ---
 
 func handleStatusCommand() {
 	cfg, _ := config.Load("boomnode.yaml")
-	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
+	if err != nil {
+		fmt.Println("Node not initialised. Run './bn run' first.")
+		os.Exit(1)
+	}
 	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 
 	fmt.Printf("Address:   %s\n", address)
 	fmt.Printf("Node name: %s\n", cfg.Node.Name)
 	fmt.Printf("Mode:      %s\n", cfg.Node.Mode)
 	fmt.Printf("Data dir:  %s\n", cfg.Storage.DataDir)
+
+	// Пробуем получить статус через API
+	callAPI("GET", "/api/status", nil)
 }
 
-// ============================================================
-// MESH
-// ============================================================
+// --- MESH (через API) ---
 
 func handleMeshCommand() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: bn mesh list")
-		fmt.Println("       bn mesh add <bm-addr> <udp_addr>")
 		os.Exit(1)
 	}
 
-	switch os.Args[2] {
-	case "list":
-		fmt.Println("DHT peers are only available when node is running.")
-		fmt.Println("Use: curl http://127.0.0.1:24555/api/mesh")
-	case "add":
-		if len(os.Args) < 5 {
-			fmt.Println("Usage: bn mesh add <bm-addr> <udp_addr:port>")
-			os.Exit(1)
-		}
-		fmt.Printf("To add DHT peer, use API:\n  curl -X POST http://127.0.0.1:24555/api/mesh -H 'Content-Type: application/json' -d '{\"address\":\"%s\",\"udp_addr\":\"%s\"}'\n", os.Args[3], os.Args[4])
+	if os.Args[2] == "list" {
+		callAPI("GET", "/api/mesh", nil)
 	}
 }
