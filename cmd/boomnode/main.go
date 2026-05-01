@@ -125,36 +125,6 @@ func prettyPrintJSON(raw string) {
 	}
 	fmt.Println(string(formatted))
 }
-
-func handleRadioCommand() {
-	if len(os.Args) < 5 {
-		fmt.Println("Usage: bn radio <msg-to> <subject> <body>")
-		fmt.Println("Example: bn radio BM-RU-FRIEND \"Hello\" \"Radio test\"")
-		os.Exit(1)
-	}
-
-	cfg, _ := config.Load("boomnode.yaml")
-	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
-	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
-
-	msg := boomex.Message{
-		Type:      boomex.TypeMSG,
-		ID:        fmt.Sprintf("radio-%d", time.Now().UnixNano()),
-		From:      from,
-		To:        os.Args[2],
-		Subject:   os.Args[3],
-		Body:      os.Args[4],
-		Timestamp: time.Now(),
-	}
-
-	fmt.Println("=== RADIO TRANSMISSION ===")
-	if err := boomex.SendMessageViaRadio(from, msg); err != nil {
-		fmt.Printf("Radio error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Radio transmission completed.")
-}
-
 // downloadFile скачивает файл через API
 downloadFile(method, path string, body interface{}, filename string) {
 	var bodyReader io.Reader
@@ -208,6 +178,39 @@ func uploadFile(path, filename string) {
 
 	result, _ := io.ReadAll(resp.Body)
 	fmt.Print(string(result))
+}
+
+// ============================================================
+// RADIO HANDLER
+// ============================================================
+
+func handleRadioCommand() {
+	if len(os.Args) < 5 {
+		fmt.Println("Usage: bn radio <msg-to> <subject> <body>")
+		fmt.Println("Example: bn radio BM-RU-FRIEND \"Hello\" \"Radio test\"")
+		os.Exit(1)
+	}
+
+	cfg, _ := config.Load("boomnode.yaml")
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+
+	msg := boomex.Message{
+		Type:      boomex.TypeMSG,
+		ID:        fmt.Sprintf("radio-%d", time.Now().UnixNano()),
+		From:      from,
+		To:        os.Args[2],
+		Subject:   os.Args[3],
+		Body:      os.Args[4],
+		Timestamp: time.Now(),
+	}
+
+	fmt.Println("=== RADIO TRANSMISSION ===")
+	if err := boomex.SendMessageViaRadio(from, msg); err != nil {
+		fmt.Printf("Radio error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Radio transmission completed.")
 }
 
 // ============================================================
