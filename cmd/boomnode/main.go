@@ -15,6 +15,7 @@ import (
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
 	"github.com/BSXLAbS2025/boomnode/internal/mesh"
 	"github.com/BSXLAbS2025/boomnode/internal/storage"
+	"github.com/BSXLAbS2025/boomnode/internal/transport"
 )
 
 const apiBase = "http://127.0.0.1:24555"
@@ -44,6 +45,8 @@ func main() {
 		handleStatusCommand()
 	case "mesh":
 		handleMeshCommand()
+	case "dial":
+    	handleDialCommand()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -67,6 +70,7 @@ func printUsage() {
 	fmt.Println("  echo read <area>                 Read messages from echo")
 	fmt.Println("  export <bm-addr> [file]          Export messages for sneakernet")
 	fmt.Println("  import <file>                    Import messages from sneakernet")
+	fmt.Println("  dial <device> <baud> <phone> <msg-to> <subj> <body>  Send via dial-up modem")
 	fmt.Println("  mesh list                        List known DHT peers")
 }
 
@@ -333,6 +337,50 @@ func handleMsgCommand() {
 		fmt.Printf("Send error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// ============================================================
+// DialUP-connect
+// ============================================================
+
+func handleDialCommand() {
+	if len(os.Args) < 8 {
+		fmt.Println("Usage: bn dial <device> <baud> <phone> <msg-to> <subj> <body>")
+		fmt.Println("Example: bn dial /dev/ttyUSB0 9600 5551234 BM-RU-FRIEND \"Hello\" \"Dial-up test\"")
+		os.Exit(1)
+	}
+
+	cfg, _ := config.Load("boomnode.yaml")
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	from := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+
+	device := os.Args[2]
+	baud := 9600
+	fmt.Sscanf(os.Args[3], "%d", &baud)
+	phone := os.Args[4]
+	to := os.Args[5]
+	subject := os.Args[6]
+	body := os.Args[7]
+
+	msg := boomex.Message{
+		Type:      boomex.TypeMSG,
+		ID:        fmt.Sprintf("dial-%d", time.Now().UnixNano()),
+		From:      from,
+		To:        to,
+		Subject:   subject,
+		Body:      body,
+		Timestamp: time.Now(),
+	}
+
+	fmt.Printf("=== DIAL-UP SESSION ===\n")
+	fmt.Printf("Device: %s\nBaud: %d\nPhone: %s\nTo: %s\n", device, baud, phone, to)
+
+	if err := boomex.SendMessageViaDialup(device, baud, phone, from, msg); err != nil {
+		fmt.Printf("Dial-up error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Dial-up session completed.")
 }
 
 // ============================================================
