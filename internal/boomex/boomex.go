@@ -9,7 +9,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
-	"github.com/tarm/serial"
+	"go.bug.st/serial"
 	"github.com/BSXLAbS2025/boomnode/internal/transport"
 )
 
@@ -362,18 +362,21 @@ func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress
 }
 
 // dialSerial открывает последовательный порт и звонит
+// dialSerial открывает последовательный порт и звонит
 func dialSerial(device string, baud int, phoneNumber string) (*serialConn, error) {
-	cfg := &serial.Config{
-		Name:        device,
-		Baud:        baud,
-		ReadTimeout: 60 * time.Second,
+	mode := &serial.Mode{
+		BaudRate: baud,
+		DataBits: 8,
+		Parity:   serial.NoParity,
+		StopBits: serial.OneStopBit,
 	}
 
-	port, err := serial.OpenPort(cfg)
+	port, err := serial.Open(device, mode)
 	if err != nil {
 		return nil, fmt.Errorf("open port: %w", err)
 	}
 
+	port.SetReadTimeout(60 * time.Second)
 	reader := bufio.NewReader(port)
 
 	// AT-инициализация
@@ -411,6 +414,25 @@ func dialSerial(device string, baud int, phoneNumber string) (*serialConn, error
 		}
 	}
 }
+
+// serialConn реализует net.Conn для последовательного порта
+type serialConn struct {
+	port   serial.Port
+	reader *bufio.Reader
+}
+
+func (s *serialConn) Read(p []byte) (n int, err error)   { return s.port.Read(p) }
+func (s *serialConn) Write(p []byte) (n int, err error)  { return s.port.Write(p) }
+func (s *serialConn) Close() error                        { s.port.Write([]byte("ATH0\r\n")); time.Sleep(500 * time.Millisecond); return s.port.Close() }
+func (s *serialConn) LocalAddr() net.Addr                 { return &serialAddr{"modem"} }
+func (s *serialConn) RemoteAddr() net.Addr                { return &serialAddr{"remote"} }
+func (s *serialConn) SetDeadline(t time.Time) error       { return s.port.SetReadTimeout(time.Until(t)) }
+func (s *serialConn) SetReadDeadline(t time.Time) error   { return s.port.SetReadTimeout(time.Until(t)) }
+func (s *serialConn) SetWriteDeadline(t time.Time) error  { return nil }
+
+type serialAddr struct{ name string }
+func (a *serialAddr) Network() string { return "serial" }
+func (a *serialAddr) String() string  { return a.addr }
 
 // serialConn реализует net.Conn для последовательного порта
 type serialConn struct {
