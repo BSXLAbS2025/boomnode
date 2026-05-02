@@ -166,7 +166,7 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 		return fmt.Errorf("handshake failed: %w", err)
 	}
 
-	// Auto FETCH: запрашиваем накопленные сообщения
+	// Auto FETCH
 	fetchMsg := Message{
 		Type:      TypeFETCH,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
@@ -178,7 +178,6 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 		return fmt.Errorf("send FETCH error: %w", err)
 	}
 
-	// Принимаем накопленные сообщения
 	for {
 		response, err := session.Receive()
 		if err != nil {
@@ -192,7 +191,6 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 		}
 	}
 
-	// Отправляем основное сообщение
 	if err := session.Send(msg); err != nil {
 		return fmt.Errorf("send message error: %w", err)
 	}
@@ -217,7 +215,7 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 	return nil
 }
 
-// --- Relay (хранение и выдача сообщений) ---
+// --- Relay ---
 
 func StoreMessageForRelay(db *bolt.DB, msg *Message) error {
 	return db.Update(func(tx *bolt.Tx) error {
@@ -278,11 +276,7 @@ func DeleteMessagesForRelay(db *bolt.DB, msgs []Message) error {
 // DIAL-UP ТРАНСПОРТ
 // ============================================================
 
-// SendMessageViaDialup отправляет сообщение через dial-up модем
 func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress string, msg Message) error {
-	// Импортируем транспорт локально, чтобы избежать циклических зависимостей
-	// Используем чистый последовательный порт через github.com/tarm/serial
-	
 	conn, err := dialSerial(device, baud, phoneNumber)
 	if err != nil {
 		return fmt.Errorf("dial-up connect failed: %w", err)
@@ -291,7 +285,6 @@ func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress
 
 	session := NewSession(conn)
 
-	// HELO
 	helo := Message{
 		Type:      TypeHELO,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
@@ -313,7 +306,6 @@ func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress
 
 	fmt.Printf("HELO handshake successful via dial-up with %s\n", response.From)
 
-	// Auto FETCH
 	fetchMsg := Message{
 		Type:      TypeFETCH,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
@@ -336,7 +328,6 @@ func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress
 		}
 	}
 
-	// Отправка основного сообщения
 	if err := session.Send(msg); err != nil {
 		return fmt.Errorf("send MSG via dial-up error: %w", err)
 	}
@@ -361,8 +352,7 @@ func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress
 	return nil
 }
 
-// dialSerial открывает последовательный порт и звонит
-// dialSerial открывает последовательный порт и звонит
+// dialSerial открывает последовательный порт, звонит и возвращает net.Conn
 func dialSerial(device string, baud int, phoneNumber string) (*serialConn, error) {
 	mode := &serial.Mode{
 		BaudRate: baud,
@@ -379,7 +369,6 @@ func dialSerial(device string, baud int, phoneNumber string) (*serialConn, error
 	port.SetReadTimeout(60 * time.Second)
 	reader := bufio.NewReader(port)
 
-	// AT-инициализация
 	port.Write([]byte("ATZ\r\n"))
 	time.Sleep(1 * time.Second)
 	port.Write([]byte("ATE0\r\n"))
@@ -387,10 +376,8 @@ func dialSerial(device string, baud int, phoneNumber string) (*serialConn, error
 	port.Write([]byte("ATV1\r\n"))
 	time.Sleep(200 * time.Millisecond)
 
-	// Звонок
 	port.Write([]byte(fmt.Sprintf("ATDT%s\r\n", phoneNumber)))
 
-	// Ждём CONNECT
 	timeout := time.After(60 * time.Second)
 	for {
 		select {
@@ -423,33 +410,19 @@ type serialConn struct {
 
 func (s *serialConn) Read(p []byte) (n int, err error)   { return s.port.Read(p) }
 func (s *serialConn) Write(p []byte) (n int, err error)  { return s.port.Write(p) }
-func (s *serialConn) Close() error                        { s.port.Write([]byte("ATH0\r\n")); time.Sleep(500 * time.Millisecond); return s.port.Close() }
-func (s *serialConn) LocalAddr() net.Addr                 { return &serialAddr{"modem"} }
-func (s *serialConn) RemoteAddr() net.Addr                { return &serialAddr{"remote"} }
-func (s *serialConn) SetDeadline(t time.Time) error       { return s.port.SetReadTimeout(time.Until(t)) }
-func (s *serialConn) SetReadDeadline(t time.Time) error   { return s.port.SetReadTimeout(time.Until(t)) }
-func (s *serialConn) SetWriteDeadline(t time.Time) error  { return nil }
-
-type serialAddr struct{ name string }
-func (a *serialAddr) Network() string { return "serial" }
-func (a *serialAddr) String() string  { return a.addr }
-
-// serialConn реализует net.Conn для последовательного порта
-type serialConn struct {
-	port   *serial.Port
-	reader *bufio.Reader
+func (s *serialConn) Close() error {
+	s.port.Write([]byte("ATH0\r\n"))
+	time.Sleep(500 * time.Millisecond)
+	return s.port.Close()
 }
-
-func (s *serialConn) Read(p []byte) (n int, err error)   { return s.port.Read(p) }
-func (s *serialConn) Write(p []byte) (n int, err error)  { return s.port.Write(p) }
-func (s *serialConn) Close() error                        { s.port.Write([]byte("ATH0\r\n")); time.Sleep(500 * time.Millisecond); return s.port.Close() }
-func (s *serialConn) LocalAddr() net.Addr                 { return &serialAddr{"modem"} }
-func (s *serialConn) RemoteAddr() net.Addr                { return &serialAddr{"remote"} }
-func (s *serialConn) SetDeadline(t time.Time) error       { return nil }
-func (s *serialConn) SetReadDeadline(t time.Time) error   { return nil }
-func (s *serialConn) SetWriteDeadline(t time.Time) error  { return nil }
+func (s *serialConn) LocalAddr() net.Addr               { return &serialAddr{"modem"} }
+func (s *serialConn) RemoteAddr() net.Addr              { return &serialAddr{"remote"} }
+func (s *serialConn) SetDeadline(t time.Time) error      { return s.port.SetReadTimeout(time.Until(t)) }
+func (s *serialConn) SetReadDeadline(t time.Time) error  { return s.port.SetReadTimeout(time.Until(t)) }
+func (s *serialConn) SetWriteDeadline(t time.Time) error { return nil }
 
 type serialAddr struct{ name string }
+
 func (a *serialAddr) Network() string { return "serial" }
 func (a *serialAddr) String() string  { return a.name }
 
@@ -457,7 +430,6 @@ func (a *serialAddr) String() string  { return a.name }
 // РАДИО-ТРАНСПОРТ
 // ============================================================
 
-// SendMessageViaRadio отправляет сообщение через радио
 func SendMessageViaRadio(myCall string, msg Message) error {
 	cfg := transport.RadioConfig{
 		MyCall:     myCall,
@@ -476,7 +448,6 @@ func SendMessageViaRadio(myCall string, msg Message) error {
 
 	session := NewSession(conn)
 
-	// HELO
 	helo := Message{
 		Type:      TypeHELO,
 		ID:        fmt.Sprintf("radio-%d", time.Now().UnixNano()),
@@ -488,7 +459,6 @@ func SendMessageViaRadio(myCall string, msg Message) error {
 		return fmt.Errorf("send HELO via radio: %w", err)
 	}
 
-	// Ждём ответный HELO
 	response, err := session.Receive()
 	if err != nil {
 		return fmt.Errorf("receive HELO via radio: %w", err)
@@ -499,12 +469,10 @@ func SendMessageViaRadio(myCall string, msg Message) error {
 
 	fmt.Printf("Radio handshake with %s successful!\n", response.From)
 
-	// Отправляем сообщение
 	if err := session.Send(msg); err != nil {
 		return fmt.Errorf("send MSG via radio: %w", err)
 	}
 
-	// Ждём ACK
 	ack, err := session.Receive()
 	if err != nil {
 		return fmt.Errorf("receive ACK via radio: %w", err)
