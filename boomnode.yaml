@@ -1,7 +1,7 @@
 node:
   name: "BSX Station"
   geo: "RU"
-  mode: "client"  # "client" или "relay"
+  mode: "relay"  # "client" или "relay"
 
 storage:
   data_dir: "./data"
