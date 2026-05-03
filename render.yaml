@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: boomnet-relay
+    env: go
+    plan: free
+    buildCommand: go build -o bn ./cmd/boomnode
+    startCommand: ./bn run
+    envVars:
+      - key: BOOMNODE_MODE
+        value: relay
