@@ -8,6 +8,11 @@ import (
 	"os"
 )
 
+type Guardian struct {
+	Name      string `json:"name"`
+	PublicKey string `json:"public_key"`
+}
+
 type BlockEntry struct {
 	Address  string `json:"address"`
 	Reason   string `json:"reason"`
@@ -18,23 +23,10 @@ type BlockEntry struct {
 type BlockList struct {
 	Version    int          `json:"version"`
 	Updated    string       `json:"updated"`
+	Quorum     int          `json:"quorum"`
+	Guardians  []Guardian   `json:"guardians"`
 	Banned     []BlockEntry `json:"banned"`
-	Signatures []string     `json:"signatures"` // hex-подписи Хранителей
-	Quorum     int          `json:"quorum"`     // минимальное число подписей (например, 3)
-}
-
-// Guardians — список публичных ключей Хранителей (можно вынести в конфиг)
-var Guardians = map[string]ed25519.PublicKey{
-	"BSX":     hexToPubKey("abc123..."), // заменить на реальные ключи!
-	"Guardian2": hexToPubKey("def456..."),
-	"Guardian3": hexToPubKey("789abc..."),
-	"Guardian4": hexToPubKey("fedcba..."),
-	"Guardian5": hexToPubKey("123456..."),
-}
-
-func hexToPubKey(hexStr string) ed25519.PublicKey {
-	key, _ := hex.DecodeString(hexStr)
-	return ed25519.PublicKey(key)
+	Signatures []string     `json:"signatures"`
 }
 
 func LoadBlockList(path string) (map[string]bool, error) {
@@ -48,20 +40,40 @@ func LoadBlockList(path string) (map[string]bool, error) {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
+	// Преобразуем guardian'ов в ключи
+	pubKeys := make(map[string]ed25519.PublicKey)
+	for _, g := range blockList.Guardians {
+		key, err := hex.DecodeString(g.PublicKey)
+		if err != nil {
+			continue
+		}
+		pubKeys[g.Name] = ed25519.PublicKey(key)
+	}
+
 	// Проверяем мультиподпись
 	raw := make(map[string]interface{})
 	json.Unmarshal(data, &raw)
-	sigs := raw["signatures"].([]interface{})
+
+	sigsRaw, ok := raw["signatures"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("signatures missing or invalid")
+	}
+
 	delete(raw, "signatures")
 	dataWithoutSigs, _ := json.Marshal(raw)
 
 	validSigs := 0
-	for _, sigInterface := range sigs {
-		sigStr := sigInterface.(string)
-		sig, _ := hex.DecodeString(sigStr)
+	for _, sigInterface := range sigsRaw {
+		sigStr, ok := sigInterface.(string)
+		if !ok {
+			continue
+		}
+		sig, err := hex.DecodeString(sigStr)
+		if err != nil {
+			continue
+		}
 
-		// Проверяем каждую подпись
-		for name, pubKey := range Guardians {
+		for name, pubKey := range pubKeys {
 			if ed25519.Verify(pubKey, dataWithoutSigs, sig) {
 				validSigs++
 				fmt.Printf("✅ Valid signature from Guardian: %s\n", name)
