@@ -2,17 +2,21 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BSXLAbS2025/boomnode/internal/api"
+	"github.com/BSXLAbS2025/boomnode/internal/block"
 	"github.com/BSXLAbS2025/boomnode/internal/boomex"
 	"github.com/BSXLAbS2025/boomnode/internal/config"
 	"github.com/BSXLAbS2025/boomnode/internal/crypto"
+	"github.com/BSXLAbS2025/boomnode/internal/echo"
 	"github.com/BSXLAbS2025/boomnode/internal/mesh"
 	"github.com/BSXLAbS2025/boomnode/internal/storage"
 )
@@ -45,9 +49,21 @@ func main() {
 	case "mesh":
 		handleMeshCommand()
 	case "dial":
-    	handleDialCommand()
+		handleDialCommand()
 	case "radio":
-    	handleRadioCommand()
+		handleRadioCommand()
+	case "ban":
+		if len(os.Args) < 5 {
+			fmt.Println("Usage: bn ban <echo-area> <bm-address> <reason>")
+			os.Exit(1)
+		}
+		handleBanCommand()
+	case "sign-block":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: bn sign-block <block.json>")
+			os.Exit(1)
+		}
+		signBlockFile(os.Args[2])
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -73,6 +89,8 @@ func printUsage() {
 	fmt.Println("  import <file>                    Import messages from sneakernet")
 	fmt.Println("  dial <device> <baud> <phone> <msg-to> <subj> <body>  Send via dial-up modem")
 	fmt.Println("  radio <msg-to> <subj> <body>  Send message via radio (soundcard)")
+	fmt.Println("  ban <echo-area> <bm-addr> <reason>  Ban user from echo (moderator only)")
+	fmt.Println("  sign-block <block.json>          Sign a block.json file with your key")
 	fmt.Println("  mesh list                        List known DHT peers")
 }
 
@@ -80,7 +98,6 @@ func printUsage() {
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================
 
-// callAPI отправляет запрос к API и выводит форматированный ответ
 func callAPI(method, path string, body interface{}) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -104,16 +121,12 @@ func callAPI(method, path string, body interface{}) {
 	defer resp.Body.Close()
 
 	result, _ := io.ReadAll(resp.Body)
-
-	// Пробуем отформатировать JSON
 	prettyPrintJSON(string(result))
 }
 
-// prettyPrintJSON форматирует JSON для читаемого вывода
 func prettyPrintJSON(raw string) {
 	var data interface{}
 	if err := json.Unmarshal([]byte(raw), &data); err != nil {
-		// Не JSON — выводим как есть
 		fmt.Print(raw)
 		return
 	}
@@ -124,7 +137,7 @@ func prettyPrintJSON(raw string) {
 	}
 	fmt.Println(string(formatted))
 }
-// downloadFile скачивает файл через API
+
 func downloadFile(method, path string, body interface{}, filename string) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -153,7 +166,6 @@ func downloadFile(method, path string, body interface{}, filename string) {
 	fmt.Printf("Downloaded to %s\n", filename)
 }
 
-// uploadFile загружает файл через API
 func uploadFile(path, filename string) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -180,7 +192,81 @@ func uploadFile(path, filename string) {
 }
 
 // ============================================================
-// RADIO HANDLER
+// BAN / SIGN-BLOCK
+// ============================================================
+
+func handleBanCommand() {
+	echoArea := os.Args[2]
+	target := os.Args[3]
+	reason := os.Args[4]
+
+	cfg, _ := config.Load("boomnode.yaml")
+	store, _ := storage.Open(cfg.Storage.DataDir, true)
+	defer store.Close()
+
+	// Проверяем существование эхи
+	echoInfo, err := echo.GetEchoInfo(store.DB(), echoArea)
+	if err != nil {
+		fmt.Printf("Echo area '%s' not found\n", echoArea)
+		os.Exit(1)
+	}
+
+	// Проверяем свои права
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	myAddress := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
+
+	if echoInfo.Moderator != myAddress {
+		fmt.Printf("⛔ Access denied. Only moderator (%s) can ban users in '%s'\n", echoInfo.Moderator, echoArea)
+		os.Exit(1)
+	}
+
+	// Добавляем локальный бан
+	entry := block.BlockEntry{
+		Address:  target,
+		Reason:   reason,
+		BannedBy: myAddress,
+		Date:     time.Now().Format("2006-01-02"),
+	}
+
+	if err := echo.AddBan(store.DB(), echoArea, entry); err != nil {
+		fmt.Printf("Error saving ban: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("❌ Banned %s from %s: %s\n", target, echoArea, reason)
+	fmt.Printf("📝 To request global ban, send message to boombox.moderation\n")
+}
+
+func signBlockFile(path string) {
+	cfg, _ := config.Load("boomnode.yaml")
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+
+	// Читаем файл
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Printf("Cannot read file: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Удаляем старую сигнатуру
+	var raw map[string]interface{}
+	json.Unmarshal(data, &raw)
+	delete(raw, "signature")
+	dataWithoutSig, _ := json.Marshal(raw)
+
+	// Подписываем
+	sig := ed25519.Sign(keys.PrivateKey, dataWithoutSig)
+
+	// Записываем сигнатуру обратно
+	raw["signature"] = fmt.Sprintf("%x", sig)
+	signedData, _ := json.MarshalIndent(raw, "", "  ")
+	os.WriteFile(path, signedData, 0644)
+
+	fmt.Printf("✅ Signed %s successfully\n", path)
+}
+
+// ============================================================
+// RADIO
 // ============================================================
 
 func handleRadioCommand() {
@@ -239,7 +325,23 @@ func runNode() {
 	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 	pubKeyStr := fmt.Sprintf("%x", keys.PublicKey)
 
-	fmt.Println("=== BoomNode v0.3.0-alpha ===")
+	// Загрузка глобального block.json
+	var banned map[string]bool
+	rootPubKey := keys.PublicKey // или твой конкретный ключ
+	if blockData, err := block.LoadBlockList("block.json", rootPubKey); err == nil {
+		banned = blockData
+		fmt.Printf("✅ Block list loaded: %d banned addresses\n", len(banned))
+
+		// Проверка самого себя
+		if block.IsBanned(banned, address) {
+			fmt.Println("⛔ Warn! You are banned. Bye.")
+			os.Exit(1)
+		}
+	} else {
+		fmt.Printf("⚠️ Block list not loaded: %v\n", err)
+	}
+
+	fmt.Println("=== BoomNode v0.3.1-alpha ===")
 	fmt.Println("BoomNet: Where Ideas Detonate")
 	fmt.Println()
 	fmt.Printf("Address:   %s\n", address)
@@ -261,6 +363,20 @@ func runNode() {
 	defer meshSrv.Stop()
 
 	handler := func(session *boomex.Session, msg *boomex.Message) {
+		// Проверка глобального бана
+		if banned != nil && block.IsBanned(banned, msg.From) {
+			fmt.Printf("⛔ Blocked message from globally banned: %s\n", msg.From)
+			return
+		}
+
+		// Проверка локального бана в эхе
+		if strings.HasPrefix(msg.To, "boombox.") || strings.HasPrefix(msg.To, "emergency.") {
+			if echo.IsBannedInEcho(store.DB(), msg.To, msg.From) {
+				fmt.Printf("⛔ Blocked message from locally banned: %s in %s\n", msg.From, msg.To)
+				return
+			}
+		}
+
 		fmt.Printf("=== INCOMING MESSAGE ===\nFrom: %s\nSubject: %s\nBody: %s\n=========================\n", msg.From, msg.Subject, msg.Body)
 		if msg.To != address && store.DB() != nil {
 			boomex.StoreMessageForRelay(store.DB(), msg)
@@ -325,14 +441,12 @@ func handleMsgCommand() {
 		os.Exit(1)
 	}
 
-	// Загружаем конфиг
 	cfg, err := config.Load("boomnode.yaml")
 	if err != nil {
 		fmt.Printf("Config error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Пытаемся загрузить ключи
 	keys, err := crypto.LoadKeys(cfg.Storage.DataDir)
 	if err != nil {
 		fmt.Println("Keys not found. Please run './bn run' first to initialize the node.")
@@ -374,7 +488,7 @@ func handleMsgCommand() {
 }
 
 // ============================================================
-// DialUP-connect
+// DIAL-UP
 // ============================================================
 
 func handleDialCommand() {
@@ -504,11 +618,10 @@ func handleImportCommand() {
 }
 
 // ============================================================
-// STATUS (исправлено!)
+// STATUS
 // ============================================================
 
 func handleStatusCommand() {
-	// Сначала пробуем получить статус через API (сервер запущен)
 	resp, err := http.Get(apiBase + "/api/status")
 	if err == nil {
 		defer resp.Body.Close()
@@ -517,7 +630,6 @@ func handleStatusCommand() {
 		return
 	}
 
-	// Сервер не запущен — читаем локальные данные
 	cfg, err := config.Load("boomnode.yaml")
 	if err != nil {
 		fmt.Println("Config not found. Run './bn run' first.")
