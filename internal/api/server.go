@@ -257,7 +257,7 @@ func (s *Server) handleEchoes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON", 400)
 			return
 		}
-		if err := echo.Subscribe(s.db, req.Name, req.Description); err != nil {
+		if err := echo.Subscribe(s.db, req.Name, req.Description, s.myAddress); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
