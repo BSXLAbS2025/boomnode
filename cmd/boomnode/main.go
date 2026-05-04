@@ -241,28 +241,35 @@ func signBlockFile(path string) {
 	cfg, _ := config.Load("boomnode.yaml")
 	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
 
-	// Читаем файл
 	data, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Printf("Cannot read file: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Удаляем старую сигнатуру
 	var raw map[string]interface{}
 	json.Unmarshal(data, &raw)
-	delete(raw, "signature")
-	dataWithoutSig, _ := json.Marshal(raw)
+
+	// Удаляем старые сигнатуры для чистоты данных
+	delete(raw, "signatures")
+	dataWithoutSigs, _ := json.Marshal(raw)
 
 	// Подписываем
-	sig := ed25519.Sign(keys.PrivateKey, dataWithoutSig)
+	sig := ed25519.Sign(keys.PrivateKey, dataWithoutSigs)
+	sigHex := hex.EncodeToString(sig)
 
-	// Записываем сигнатуру обратно
-	raw["signature"] = fmt.Sprintf("%x", sig)
+	// Добавляем подпись в массив
+	sigs, _ := raw["signatures"].([]interface{})
+	if sigs == nil {
+		sigs = make([]interface{}, 0)
+	}
+	sigs = append(sigs, sigHex)
+	raw["signatures"] = sigs
+
 	signedData, _ := json.MarshalIndent(raw, "", "  ")
 	os.WriteFile(path, signedData, 0644)
 
-	fmt.Printf("✅ Signed %s successfully\n", path)
+	fmt.Printf("✅ Signed %s successfully with key %s\n", path, crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo))
 }
 
 // ============================================================
