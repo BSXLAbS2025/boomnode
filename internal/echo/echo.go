@@ -5,30 +5,36 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/BSXLAbS2025/boomnode/internal/block"
 	"github.com/BSXLAbS2025/boomnode/internal/boomex"
 	bolt "go.etcd.io/bbolt"
 )
 
 // EchoArea — эхоконференция
 type EchoArea struct {
-	Name        string    `json:"name"`        // boombox.general
+	Name        string    `json:"name"`
 	Description string    `json:"description"`
-	Moderator   string    `json:"moderator"`   // BM-адрес модератора
+	Moderator   string    `json:"moderator"`
 	Created     time.Time `json:"created"`
-	Messages    int       `json:"messages"`    // счётчик сообщений
+	Messages    int       `json:"messages"`
 }
 
 // Subscribe подписывает узел на эху
-func Subscribe(db *bolt.DB, areaName string, description string) error {
+func Subscribe(db *bolt.DB, areaName string, description string, moderator string) error {
 	area := EchoArea{
 		Name:        areaName,
 		Description: description,
+		Moderator:   moderator,
 		Created:     time.Now(),
 	}
 	return db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("echoes"))
 		if b == nil {
 			return fmt.Errorf("bucket echoes not found")
+		}
+		// Не перезаписываем существующую эху
+		if existing := b.Get([]byte(areaName)); existing != nil {
+			return nil
 		}
 		data, _ := json.Marshal(area)
 		return b.Put([]byte(areaName), data)
@@ -53,6 +59,26 @@ func ListEchoes(db *bolt.DB) ([]EchoArea, error) {
 		})
 	})
 	return echoes, err
+}
+
+// GetEchoInfo возвращает информацию об эхе
+func GetEchoInfo(db *bolt.DB, name string) (*EchoArea, error) {
+	var area EchoArea
+	err := db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("echoes"))
+		if b == nil {
+			return fmt.Errorf("bucket echoes not found")
+		}
+		data := b.Get([]byte(name))
+		if data == nil {
+			return fmt.Errorf("echo area '%s' not found", name)
+		}
+		return json.Unmarshal(data, &area)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &area, nil
 }
 
 // PostToEcho отправляет сообщение в эху (всем подписчикам)
@@ -90,4 +116,35 @@ func PostToEcho(db *bolt.DB, areaName string, from string, subject string, body 
 		newData, _ := json.Marshal(area)
 		return b.Put([]byte(areaName), newData)
 	})
+}
+
+// AddBan добавляет запись о бане в эху
+func AddBan(db *bolt.DB, echoName string, entry block.BlockEntry) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("bans"))
+		if b == nil {
+			return fmt.Errorf("bucket bans not found")
+		}
+		key := fmt.Sprintf("%s_%s", echoName, entry.Address)
+		data, _ := json.Marshal(entry)
+		return b.Put([]byte(key), data)
+	})
+}
+
+// IsBannedInEcho проверяет, забанен ли адрес в конкретной эхе
+func IsBannedInEcho(db *bolt.DB, echoName string, address string) bool {
+	var entry block.BlockEntry
+	err := db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("bans"))
+		if b == nil {
+			return fmt.Errorf("bucket bans not found")
+		}
+		key := fmt.Sprintf("%s_%s", echoName, address)
+		data := b.Get([]byte(key))
+		if data == nil {
+			return fmt.Errorf("not banned")
+		}
+		return json.Unmarshal(data, &entry)
+	})
+	return err == nil
 }
