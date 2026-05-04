@@ -369,6 +369,16 @@ func runNode() {
 	}
 	defer meshSrv.Stop()
 
+	seeds, err := loadSeeds("seeds.json")
+	if err != nil {
+    	fmt.Printf("⚠️ Seeds file not loaded: %v\n", err)
+	} else {
+    	for _, seed := range seeds {
+        	meshSrv.AddPeer(seed.Address, seed.UDPAddr, true)
+        	fmt.Printf("🌱 Seed peer added: %s\n", seed.Address)
+    	}
+	}
+	
 	handler := func(session *boomex.Session, msg *boomex.Message) {
 		// Проверка глобального бана
 		if banned != nil && block.IsBanned(banned, msg.From) {
