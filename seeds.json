@@ -1,0 +1,9 @@
+[
+  {
+    "address": "BM-ON-RELAYONE",
+    "tcp": "relay1.boomnet.org:24554",
+    "udp": "relay1.boomnet.org:24553",
+    "owner": "BSX Labs",
+    "description": "Primary public relay"
+  }
+]
