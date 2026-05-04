@@ -2,12 +2,12 @@ package block
 
 import (
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 )
 
-// BlockEntry — запись о бане
 type BlockEntry struct {
 	Address  string `json:"address"`
 	Reason   string `json:"reason"`
@@ -15,52 +15,66 @@ type BlockEntry struct {
 	Date     string `json:"date"`
 }
 
-// BlockList — структура block.json
 type BlockList struct {
-	Version   int          `json:"version"`
-	Updated   string       `json:"updated"`
-	Signature string       `json:"signature"`
-	Banned    []BlockEntry `json:"banned"`
+	Version    int          `json:"version"`
+	Updated    string       `json:"updated"`
+	Banned     []BlockEntry `json:"banned"`
+	Signatures []string     `json:"signatures"` // hex-подписи Хранителей
+	Quorum     int          `json:"quorum"`     // минимальное число подписей (например, 3)
 }
 
-// LoadBlockList загружает и проверяет подпись block.json
-func LoadBlockList(path string, rootPubKey ed25519.PublicKey) (map[string]bool, error) {
+// Guardians — список публичных ключей Хранителей (можно вынести в конфиг)
+var Guardians = map[string]ed25519.PublicKey{
+	"BSX":     hexToPubKey("abc123..."), // заменить на реальные ключи!
+	"Guardian2": hexToPubKey("def456..."),
+	"Guardian3": hexToPubKey("789abc..."),
+	"Guardian4": hexToPubKey("fedcba..."),
+	"Guardian5": hexToPubKey("123456..."),
+}
+
+func hexToPubKey(hexStr string) ed25519.PublicKey {
+	key, _ := hex.DecodeString(hexStr)
+	return ed25519.PublicKey(key)
+}
+
+func LoadBlockList(path string) (map[string]bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read block.json: %w", err)
 	}
 
-	// Извлекаем сигнатуру и данные без неё
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	var blockList BlockList
+	if err := json.Unmarshal(data, &blockList); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	sigStr, ok := raw["signature"].(string)
-	if !ok {
-		return nil, fmt.Errorf("signature missing")
+	// Проверяем мультиподпись
+	raw := make(map[string]interface{})
+	json.Unmarshal(data, &raw)
+	sigs := raw["signatures"].([]interface{})
+	delete(raw, "signatures")
+	dataWithoutSigs, _ := json.Marshal(raw)
+
+	validSigs := 0
+	for _, sigInterface := range sigs {
+		sigStr := sigInterface.(string)
+		sig, _ := hex.DecodeString(sigStr)
+
+		// Проверяем каждую подпись
+		for name, pubKey := range Guardians {
+			if ed25519.Verify(pubKey, dataWithoutSigs, sig) {
+				validSigs++
+				fmt.Printf("✅ Valid signature from Guardian: %s\n", name)
+				break
+			}
+		}
 	}
 
-	delete(raw, "signature")
-	dataWithoutSig, _ := json.Marshal(raw)
-
-	// Декодируем сигнатуру из hex
-	sig := make([]byte, ed25519.SignatureSize)
-	n, err := fmt.Sscanf(sigStr, "%x", &sig)
-	if err != nil || n != 1 {
-		return nil, fmt.Errorf("invalid signature format")
+	if validSigs < blockList.Quorum {
+		return nil, fmt.Errorf("not enough valid signatures: %d/%d", validSigs, blockList.Quorum)
 	}
 
-	// Проверяем подпись
-	if !ed25519.Verify(rootPubKey, dataWithoutSig, sig) {
-		return nil, fmt.Errorf("invalid block.json signature — possible tampering")
-	}
-
-	// Парсим список
-	var blockList BlockList
-	if err := json.Unmarshal(data, &blockList); err != nil {
-		return nil, fmt.Errorf("cannot parse block.json: %w", err)
-	}
+	fmt.Printf("✅ Block list verified with %d/%d signatures\n", validSigs, blockList.Quorum)
 
 	banned := make(map[string]bool)
 	for _, entry := range blockList.Banned {
@@ -70,7 +84,6 @@ func LoadBlockList(path string, rootPubKey ed25519.PublicKey) (map[string]bool, 
 	return banned, nil
 }
 
-// IsBanned проверяет, забанен ли адрес
 func IsBanned(banned map[string]bool, address string) bool {
 	return banned[address]
 }
