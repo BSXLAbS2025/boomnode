@@ -335,7 +335,6 @@ func runNode() {
 
 	// Загрузка глобального block.json
 	var banned map[string]bool
-	rootPubKey := keys.PublicKey // или твой конкретный ключ
 	if blockData, err := block.LoadBlockList("block.json"); err == nil {
 		banned = blockData
 		fmt.Printf("✅ Block list loaded: %d banned addresses\n", len(banned))
@@ -682,4 +681,28 @@ func handleMeshCommand() {
 	if os.Args[2] == "list" {
 		callAPI("GET", "/api/mesh", nil)
 	}
+}
+
+// ============================================================
+// SEEDS
+// ============================================================
+
+type SeedPeer struct {
+	Address     string `json:"address"`
+	TCP         string `json:"tcp"`
+	UDP         string `json:"udp"`
+	Owner       string `json:"owner"`
+	Description string `json:"description"`
+}
+
+func loadSeeds(path string) ([]SeedPeer, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var seeds []SeedPeer
+	if err := json.Unmarshal(data, &seeds); err != nil {
+		return nil, err
+	}
+	return seeds, nil
 }
