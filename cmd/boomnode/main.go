@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -335,7 +336,7 @@ func runNode() {
 	// Загрузка глобального block.json
 	var banned map[string]bool
 	rootPubKey := keys.PublicKey // или твой конкретный ключ
-	if blockData, err := block.LoadBlockList("block.json", rootPubKey); err == nil {
+	if blockData, err := block.LoadBlockList("block.json"); err == nil {
 		banned = blockData
 		fmt.Printf("✅ Block list loaded: %d banned addresses\n", len(banned))
 
