@@ -373,10 +373,10 @@ func runNode() {
 	if err != nil {
     	fmt.Printf("⚠️ Seeds file not loaded: %v\n", err)
 	} else {
-    	for _, seed := range seeds {
-        	meshSrv.AddPeer(seed.Address, seed.UDPAddr, true)
-        	fmt.Printf("🌱 Seed peer added: %s\n", seed.Address)
-    	}
+		udpAddr, err := net.ResolveUDPAddr("udp", seed.UDP)
+		if err == nil {
+    		meshSrv.AddPeer(seed.Address, *udpAddr, true)
+    		fmt.Printf("🌱 Seed peer added: %s (%s)\n", seed.Address, seed.Description)
 	}
 	
 	handler := func(session *boomex.Session, msg *boomex.Message) {
