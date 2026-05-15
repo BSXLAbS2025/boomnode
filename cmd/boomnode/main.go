@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -23,6 +24,9 @@ import (
 )
 
 const apiBase = "http://127.0.0.1:24555"
+
+// URL для синхронизации block.json (Wiki BSX Labs)
+const blockListURL = "https://bsxlabs2025.github.io/boomnode/block.json"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -65,6 +69,8 @@ func main() {
 			os.Exit(1)
 		}
 		signBlockFile(os.Args[2])
+	case "pubkey":
+		handlePubkeyCommand()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -77,6 +83,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  run                              Start node")
 	fmt.Println("  status                           Show node status")
+	fmt.Println("  pubkey                           Show your public key (hex)")
 	fmt.Println("  peer add <bm-addr> <name>        Add peer by BM address")
 	fmt.Println("  peer list                        List peers")
 	fmt.Println("  msg <bm-addr> <subject> <body>   Send message to peer")
@@ -193,7 +200,33 @@ func uploadFile(path, filename string) {
 }
 
 // ============================================================
-// BAN / SIGN-BLOCK
+// BLOCK.JSON СИНХРОНИЗАЦИЯ
+// ============================================================
+
+// downloadBlockList скачивает block.json с Wiki
+func downloadBlockList() error {
+	fmt.Printf("⏬ Downloading block.json from %s...\n", blockListURL)
+
+	resp, err := http.Get(blockListURL)
+	if err != nil {
+		return fmt.Errorf("cannot download block.json: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("block.json not available (HTTP %d)", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("cannot read block.json: %w", err)
+	}
+
+	return os.WriteFile("block.json", data, 0644)
+}
+
+// ============================================================
+// BAN / SIGN-BLOCK / PUBKEY
 // ============================================================
 
 func handleBanCommand() {
@@ -205,14 +238,12 @@ func handleBanCommand() {
 	store, _ := storage.Open(cfg.Storage.DataDir, true)
 	defer store.Close()
 
-	// Проверяем существование эхи
 	echoInfo, err := echo.GetEchoInfo(store.DB(), echoArea)
 	if err != nil {
 		fmt.Printf("Echo area '%s' not found\n", echoArea)
 		os.Exit(1)
 	}
 
-	// Проверяем свои права
 	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
 	myAddress := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 
@@ -221,7 +252,6 @@ func handleBanCommand() {
 		os.Exit(1)
 	}
 
-	// Добавляем локальный бан
 	entry := block.BlockEntry{
 		Address:  target,
 		Reason:   reason,
@@ -251,15 +281,12 @@ func signBlockFile(path string) {
 	var raw map[string]interface{}
 	json.Unmarshal(data, &raw)
 
-	// Удаляем старые сигнатуры для чистоты данных
 	delete(raw, "signatures")
 	dataWithoutSigs, _ := json.Marshal(raw)
 
-	// Подписываем
 	sig := ed25519.Sign(keys.PrivateKey, dataWithoutSigs)
 	sigHex := hex.EncodeToString(sig)
 
-	// Добавляем подпись в массив
 	sigs, _ := raw["signatures"].([]interface{})
 	if sigs == nil {
 		sigs = make([]interface{}, 0)
@@ -273,6 +300,12 @@ func signBlockFile(path string) {
 	fmt.Printf("✅ Signed %s successfully with key %s\n", path, crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo))
 }
 
+func handlePubkeyCommand() {
+	cfg, _ := config.Load("boomnode.yaml")
+	keys, _ := crypto.LoadKeys(cfg.Storage.DataDir)
+	fmt.Printf("%x\n", keys.PublicKey)
+}
+
 // ============================================================
 // RADIO
 // ============================================================
@@ -280,7 +313,6 @@ func signBlockFile(path string) {
 func handleRadioCommand() {
 	if len(os.Args) < 5 {
 		fmt.Println("Usage: bn radio <msg-to> <subject> <body>")
-		fmt.Println("Example: bn radio BM-RU-FRIEND \"Hello\" \"Radio test\"")
 		os.Exit(1)
 	}
 
@@ -333,13 +365,18 @@ func runNode() {
 	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 	pubKeyStr := fmt.Sprintf("%x", keys.PublicKey)
 
-	// Загрузка глобального block.json
+	// Попытка скачать свежий block.json с Wiki
+	if err := downloadBlockList(); err != nil {
+		fmt.Printf("⚠️ Could not download block.json: %v\n", err)
+		fmt.Println("Using local block.json if available...")
+	}
+
+	// Загрузка block.json
 	var banned map[string]bool
 	if blockData, err := block.LoadBlockList("block.json"); err == nil {
 		banned = blockData
 		fmt.Printf("✅ Block list loaded: %d banned addresses\n", len(banned))
 
-		// Проверка самого себя
 		if block.IsBanned(banned, address) {
 			fmt.Println("⛔ Warn! You are banned. Bye.")
 			os.Exit(1)
@@ -348,7 +385,7 @@ func runNode() {
 		fmt.Printf("⚠️ Block list not loaded: %v\n", err)
 	}
 
-	fmt.Println("=== BoomNode v0.3.1-alpha ===")
+	fmt.Println("=== BoomNode v0.3.2-beta ===")
 	fmt.Println("BoomNet: Where Ideas Detonate")
 	fmt.Println()
 	fmt.Printf("Address:   %s\n", address)
@@ -369,24 +406,28 @@ func runNode() {
 	}
 	defer meshSrv.Stop()
 
+	// Загрузка seed-узлов
 	seeds, err := loadSeeds("seeds.json")
 	if err != nil {
-    	fmt.Printf("⚠️ Seeds file not loaded: %v\n", err)
+		fmt.Printf("⚠️ Seeds file not loaded: %v\n", err)
 	} else {
-		udpAddr, err := net.ResolveUDPAddr("udp", seed.UDP)
-		if err == nil {
-    		meshSrv.AddPeer(seed.Address, *udpAddr, true)
-    		fmt.Printf("🌱 Seed peer added: %s (%s)\n", seed.Address, seed.Description)
+		for _, seed := range seeds {
+			udpAddr, err := net.ResolveUDPAddr("udp", seed.UDP)
+			if err == nil {
+				meshSrv.AddPeer(seed.Address, *udpAddr, true)
+				fmt.Printf("🌱 Seed peer added: %s (%s)\n", seed.Address, seed.Description)
+			} else {
+				fmt.Printf("⚠️ Invalid UDP address for seed %s: %s\n", seed.Address, seed.UDP)
+			}
+		}
 	}
-	
+
 	handler := func(session *boomex.Session, msg *boomex.Message) {
-		// Проверка глобального бана
 		if banned != nil && block.IsBanned(banned, msg.From) {
 			fmt.Printf("⛔ Blocked message from globally banned: %s\n", msg.From)
 			return
 		}
 
-		// Проверка локального бана в эхе
 		if strings.HasPrefix(msg.To, "boombox.") || strings.HasPrefix(msg.To, "emergency.") {
 			if echo.IsBannedInEcho(store.DB(), msg.To, msg.From) {
 				fmt.Printf("⛔ Blocked message from locally banned: %s in %s\n", msg.From, msg.To)
@@ -417,6 +458,20 @@ func runNode() {
 
 	fmt.Println("Node is running. Press Ctrl+C to exit.")
 	fmt.Println("Services: BoomEx :24554 | BoomMesh :24553 | API :24555")
+	fmt.Println()
+
+	// Периодическая синхронизация block.json (каждый час)
+	go func() {
+		for {
+			time.Sleep(1 * time.Hour)
+			if err := downloadBlockList(); err != nil {
+				fmt.Printf("⚠️ Block list sync failed: %v\n", err)
+			} else {
+				fmt.Println("🔄 Block list synced from Wiki")
+			}
+		}
+	}()
+
 	select {}
 }
 
@@ -511,7 +566,6 @@ func handleMsgCommand() {
 func handleDialCommand() {
 	if len(os.Args) < 8 {
 		fmt.Println("Usage: bn dial <device> <baud> <phone> <msg-to> <subj> <body>")
-		fmt.Println("Example: bn dial /dev/ttyUSB0 9600 5551234 BM-RU-FRIEND \"Hello\" \"Dial-up test\"")
 		os.Exit(1)
 	}
 
@@ -537,8 +591,7 @@ func handleDialCommand() {
 		Timestamp: time.Now(),
 	}
 
-	fmt.Printf("=== DIAL-UP SESSION ===\n")
-	fmt.Printf("Device: %s\nBaud: %d\nPhone: %s\nTo: %s\n", device, baud, phone, to)
+	fmt.Printf("=== DIAL-UP SESSION ===\nDevice: %s\nBaud: %d\nPhone: %s\nTo: %s\n", device, baud, phone, to)
 
 	if err := boomex.SendMessageViaDialup(device, baud, phone, from, msg); err != nil {
 		fmt.Printf("Dial-up error: %v\n", err)
@@ -564,7 +617,6 @@ func handleEchoCommand() {
 	switch os.Args[2] {
 	case "list":
 		callAPI("GET", "/api/echoes", nil)
-
 	case "sub":
 		if len(os.Args) < 4 {
 			fmt.Println("Usage: bn echo sub <name> [description]")
@@ -578,7 +630,6 @@ func handleEchoCommand() {
 			"name":        os.Args[3],
 			"description": desc,
 		})
-
 	case "post":
 		if len(os.Args) < 6 {
 			fmt.Println("Usage: bn echo post <area> <subject> <body>")
@@ -589,14 +640,12 @@ func handleEchoCommand() {
 			"subject": os.Args[4],
 			"body":    os.Args[5],
 		})
-
 	case "read":
 		if len(os.Args) < 4 {
 			fmt.Println("Usage: bn echo read <area>")
 			os.Exit(1)
 		}
 		callAPI("GET", "/api/echo/read?area="+os.Args[3], nil)
-
 	default:
 		fmt.Printf("Unknown echo command: %s\n", os.Args[2])
 	}
@@ -660,7 +709,6 @@ func handleStatusCommand() {
 	}
 
 	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
-
 	fmt.Println("Node is OFFLINE")
 	fmt.Printf("Address:   %s\n", address)
 	fmt.Printf("Node name: %s\n", cfg.Node.Name)
