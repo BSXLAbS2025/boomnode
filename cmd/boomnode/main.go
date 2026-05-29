@@ -23,9 +23,10 @@ import (
 	"github.com/BSXLAbS2025/boomnode/internal/storage"
 )
 
-const apiBase = "http://127.0.0.1:24555"
+// Version — устанавливается при сборке через -ldflags "-X main.Version=v0.3.2"
+var Version = "unknown"
 
-// URL для синхронизации block.json (Wiki BSX Labs)
+const apiBase = "http://127.0.0.1:24555"
 const blockListURL = "https://bsxlabs2025.github.io/boomnode/block.json"
 
 func main() {
@@ -200,10 +201,36 @@ func uploadFile(path, filename string) {
 }
 
 // ============================================================
+// GITHUB RELEASES ПРОВЕРКА
+// ============================================================
+
+type GitHubRelease struct {
+	TagName string `json:"tag_name"`
+}
+
+func checkLatestVersion() (string, error) {
+	resp, err := http.Get("https://api.github.com/repos/BSXLAbS2025/boomnode/releases/latest")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var release GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return "", err
+	}
+
+	return strings.TrimPrefix(release.TagName, "v"), nil
+}
+
+// ============================================================
 // BLOCK.JSON СИНХРОНИЗАЦИЯ
 // ============================================================
 
-// downloadBlockList скачивает block.json с Wiki
 func downloadBlockList() error {
 	fmt.Printf("⏬ Downloading block.json from %s...\n", blockListURL)
 
@@ -328,6 +355,7 @@ func handleRadioCommand() {
 		Subject:   os.Args[3],
 		Body:      os.Args[4],
 		Timestamp: time.Now(),
+		Version:   Version,
 	}
 
 	fmt.Println("=== RADIO TRANSMISSION ===")
@@ -365,6 +393,21 @@ func runNode() {
 	address := crypto.AddressFromKey(keys.PublicKey, cfg.Node.Geo)
 	pubKeyStr := fmt.Sprintf("%x", keys.PublicKey)
 
+	// Проверка обновлений
+	go func() {
+		latest, err := checkLatestVersion()
+		if err != nil {
+			fmt.Printf("⚠️ Cannot check for updates: %v\n", err)
+			return
+		}
+		if latest != "" && latest != Version {
+			fmt.Printf("🚨 NEW VERSION AVAILABLE: %s (you have %s)\n", latest, Version)
+			fmt.Println("   Update: git pull && go build -o bn ./cmd/boomnode")
+		} else {
+			fmt.Printf("✅ You are running the latest version (%s)\n", Version)
+		}
+	}()
+
 	// Попытка скачать свежий block.json с Wiki
 	if err := downloadBlockList(); err != nil {
 		fmt.Printf("⚠️ Could not download block.json: %v\n", err)
@@ -385,7 +428,7 @@ func runNode() {
 		fmt.Printf("⚠️ Block list not loaded: %v\n", err)
 	}
 
-	fmt.Println("=== BoomNode v0.3.2-beta ===")
+	fmt.Println("=== BoomNode " + Version + " ===")
 	fmt.Println("BoomNet: Where Ideas Detonate")
 	fmt.Println()
 	fmt.Printf("Address:   %s\n", address)
@@ -423,6 +466,11 @@ func runNode() {
 	}
 
 	handler := func(session *boomex.Session, msg *boomex.Message) {
+		// Проверка версии отправителя
+		if msg.Version != "" && msg.Version != Version {
+			fmt.Printf("⚠️ Peer %s uses version %s (you have %s)\n", msg.From, msg.Version, Version)
+		}
+
 		if banned != nil && block.IsBanned(banned, msg.From) {
 			fmt.Printf("⛔ Blocked message from globally banned: %s\n", msg.From)
 			return
@@ -442,7 +490,7 @@ func runNode() {
 		}
 	}
 
-	boomexSrv := boomex.NewServer("0.0.0.0:24554", address, store.DB(), isRelay, cfg.Relay.Whitelist, handler)
+	boomexSrv := boomex.NewServer("0.0.0.0:24554", address, store.DB(), isRelay, cfg.Relay.Whitelist, handler, Version)
 	if err := boomexSrv.Start(); err != nil {
 		fmt.Printf("BoomEx server error: %v\n", err)
 		os.Exit(1)
@@ -468,6 +516,21 @@ func runNode() {
 				fmt.Printf("⚠️ Block list sync failed: %v\n", err)
 			} else {
 				fmt.Println("🔄 Block list synced from Wiki")
+			}
+		}
+	}()
+
+	// Периодическая проверка обновлений (раз в сутки)
+	go func() {
+		for {
+			time.Sleep(24 * time.Hour)
+			latest, err := checkLatestVersion()
+			if err != nil {
+				continue
+			}
+			if latest != "" && latest != Version {
+				fmt.Printf("🚨 NEW VERSION AVAILABLE: %s (you have %s)\n", latest, Version)
+				fmt.Println("   Update: git pull && go build -o bn ./cmd/boomnode")
 			}
 		}
 	}()
@@ -550,10 +613,11 @@ func handleMsgCommand() {
 		Subject:   os.Args[3],
 		Body:      os.Args[4],
 		Timestamp: time.Now(),
+		Version:   Version,
 	}
 
 	fmt.Printf("Sending to %s...\n", tcpAddr)
-	if err := boomex.SendMessageToPeer(tcpAddr, from, msg); err != nil {
+	if err := boomex.SendMessageToPeer(tcpAddr, from, msg, Version); err != nil {
 		fmt.Printf("Send error: %v\n", err)
 		os.Exit(1)
 	}
@@ -589,11 +653,12 @@ func handleDialCommand() {
 		Subject:   subject,
 		Body:      body,
 		Timestamp: time.Now(),
+		Version:   Version,
 	}
 
 	fmt.Printf("=== DIAL-UP SESSION ===\nDevice: %s\nBaud: %d\nPhone: %s\nTo: %s\n", device, baud, phone, to)
 
-	if err := boomex.SendMessageViaDialup(device, baud, phone, from, msg); err != nil {
+	if err := boomex.SendMessageViaDialup(device, baud, phone, from, msg, Version); err != nil {
 		fmt.Printf("Dial-up error: %v\n", err)
 		os.Exit(1)
 	}
@@ -713,6 +778,7 @@ func handleStatusCommand() {
 	fmt.Printf("Address:   %s\n", address)
 	fmt.Printf("Node name: %s\n", cfg.Node.Name)
 	fmt.Printf("Mode:      %s\n", cfg.Node.Mode)
+	fmt.Printf("Version:   %s\n", Version)
 	fmt.Printf("Data dir:  %s\n", cfg.Storage.DataDir)
 }
 
