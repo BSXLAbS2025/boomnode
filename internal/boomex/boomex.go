@@ -13,6 +13,9 @@ import (
 	"github.com/BSXLAbS2025/boomnode/internal/transport"
 )
 
+// Version — устанавливается при сборке через -ldflags
+var Version = "unknown"
+
 // --- Типы сообщений ---
 
 type MessageType string
@@ -28,13 +31,16 @@ const (
 // --- Структуры ---
 
 type Message struct {
-	Type      MessageType `json:"type"`
-	ID        string      `json:"id"`
-	From      string      `json:"from"`
-	To        string      `json:"to"`
-	Subject   string      `json:"subject"`
-	Body      string      `json:"body"`
-	Timestamp time.Time   `json:"timestamp"`
+	Type        MessageType    `json:"type"`
+	ID          string         `json:"id"`
+	From        string         `json:"from"`
+	To          string         `json:"to"`
+	Subject     string         `json:"subject"`
+	Body        string         `json:"body"`
+	Timestamp   time.Time      `json:"timestamp"`
+	ReplyTo     string         `json:"reply_to,omitempty"`
+	VectorClock map[string]int `json:"vector_clock,omitempty"`
+	Version     string         `json:"version,omitempty"`
 }
 
 type Session struct {
@@ -50,6 +56,7 @@ type MessageHandler func(session *Session, msg *Message)
 type Server struct {
 	listenAddr   string
 	myAddress    string
+	myVersion    string
 	handler      MessageHandler
 	listener     net.Listener
 	db           *bolt.DB
@@ -129,13 +136,14 @@ func (s *Session) RemoteAddr() string {
 	return s.addr
 }
 
-func (s *Session) Handshake(myAddress string, expectAddress string) error {
+func (s *Session) Handshake(myAddress string, expectAddress string, myVersion string) error {
 	helo := Message{
 		Type:      TypeHELO,
 		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
 		From:      myAddress,
 		To:        expectAddress,
 		Timestamp: time.Now(),
+		Version:   myVersion,
 	}
 	if err := s.Send(helo); err != nil {
 		return fmt.Errorf("send HELO error: %w", err)
@@ -153,7 +161,7 @@ func (s *Session) Handshake(myAddress string, expectAddress string) error {
 	return nil
 }
 
-func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
+func SendMessageToPeer(tcpAddr string, myAddress string, msg Message, myVersion string) error {
 	conn, err := net.DialTimeout("tcp", tcpAddr, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("connect to %s failed: %w", tcpAddr, err)
@@ -162,7 +170,7 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 
 	session := NewSession(conn)
 
-	if err := session.Handshake(myAddress, msg.To); err != nil {
+	if err := session.Handshake(myAddress, msg.To, myVersion); err != nil {
 		return fmt.Errorf("handshake failed: %w", err)
 	}
 
@@ -173,6 +181,7 @@ func SendMessageToPeer(tcpAddr string, myAddress string, msg Message) error {
 		From:      myAddress,
 		To:        msg.To,
 		Timestamp: time.Now(),
+		Version:   myVersion,
 	}
 	if err := session.Send(fetchMsg); err != nil {
 		return fmt.Errorf("send FETCH error: %w", err)
@@ -276,7 +285,7 @@ func DeleteMessagesForRelay(db *bolt.DB, msgs []Message) error {
 // DIAL-UP ТРАНСПОРТ
 // ============================================================
 
-func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress string, msg Message) error {
+func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress string, msg Message, myVersion string) error {
 	conn, err := dialSerial(device, baud, phoneNumber)
 	if err != nil {
 		return fmt.Errorf("dial-up connect failed: %w", err)
@@ -285,33 +294,18 @@ func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress
 
 	session := NewSession(conn)
 
-	helo := Message{
-		Type:      TypeHELO,
-		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
-		From:      myAddress,
-		To:        msg.To,
-		Timestamp: time.Now(),
-	}
-	if err := session.Send(helo); err != nil {
-		return fmt.Errorf("send HELO via dial-up error: %w", err)
+	if err := session.Handshake(myAddress, msg.To, myVersion); err != nil {
+		return fmt.Errorf("handshake via dial-up error: %w", err)
 	}
 
-	response, err := session.Receive()
-	if err != nil {
-		return fmt.Errorf("receive HELO response via dial-up error: %w", err)
-	}
-	if response.Type != TypeHELO {
-		return fmt.Errorf("expected HELO, got %s", response.Type)
-	}
-
-	fmt.Printf("HELO handshake successful via dial-up with %s\n", response.From)
-
+	// Auto FETCH
 	fetchMsg := Message{
 		Type:      TypeFETCH,
-		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:        fmt.Sprintf("dial-fetch-%d", time.Now().UnixNano()),
 		From:      myAddress,
 		To:        msg.To,
 		Timestamp: time.Now(),
+		Version:   myVersion,
 	}
 	session.Send(fetchMsg)
 
@@ -337,22 +331,14 @@ func SendMessageViaDialup(device string, baud int, phoneNumber string, myAddress
 		return fmt.Errorf("receive ACK via dial-up error: %w", err)
 	}
 
-	switch ack.Type {
-	case TypeACK:
+	if ack.Type == TypeACK {
 		fmt.Printf("Message delivered via dial-up to %s\n", phoneNumber)
-	case TypeMSG:
-		if ack.Subject == "RELAY_ERROR" || ack.Subject == "RELAY_DISABLED" || ack.Subject == "RELAY_DENIED" {
-			return fmt.Errorf("relay failed via dial-up: %s", ack.Body)
-		}
-		fmt.Printf("=== INCOMING (dial-up) ===\nFrom: %s\nSubject: %s\nBody: %s\n===========================\n", ack.From, ack.Subject, ack.Body)
-	default:
-		return fmt.Errorf("unexpected response via dial-up: %s", ack.Type)
 	}
 
 	return nil
 }
 
-// dialSerial открывает последовательный порт, звонит и возвращает net.Conn
+// dialSerial открывает последовательный порт и звонит
 func dialSerial(device string, baud int, phoneNumber string) (*serialConn, error) {
 	mode := &serial.Mode{
 		BaudRate: baud,
@@ -448,26 +434,9 @@ func SendMessageViaRadio(myCall string, msg Message) error {
 
 	session := NewSession(conn)
 
-	helo := Message{
-		Type:      TypeHELO,
-		ID:        fmt.Sprintf("radio-%d", time.Now().UnixNano()),
-		From:      myCall,
-		To:        msg.To,
-		Timestamp: time.Now(),
+	if err := session.Handshake(myCall, msg.To, Version); err != nil {
+		return fmt.Errorf("handshake via radio error: %w", err)
 	}
-	if err := session.Send(helo); err != nil {
-		return fmt.Errorf("send HELO via radio: %w", err)
-	}
-
-	response, err := session.Receive()
-	if err != nil {
-		return fmt.Errorf("receive HELO via radio: %w", err)
-	}
-	if response.Type != TypeHELO {
-		return fmt.Errorf("expected HELO, got %s", response.Type)
-	}
-
-	fmt.Printf("Radio handshake with %s successful!\n", response.From)
 
 	if err := session.Send(msg); err != nil {
 		return fmt.Errorf("send MSG via radio: %w", err)
@@ -487,10 +456,11 @@ func SendMessageViaRadio(myCall string, msg Message) error {
 
 // --- Server ---
 
-func NewServer(listenAddr string, myAddress string, db *bolt.DB, relayEnabled bool, whitelist []string, handler MessageHandler) *Server {
+func NewServer(listenAddr string, myAddress string, db *bolt.DB, relayEnabled bool, whitelist []string, handler MessageHandler, myVersion string) *Server {
 	s := &Server{
 		listenAddr:   listenAddr,
 		myAddress:    myAddress,
+		myVersion:    myVersion,
 		handler:      handler,
 		db:           db,
 		relayEnabled: relayEnabled,
@@ -568,7 +538,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	fmt.Printf("HELO received from %s (%s)\n", helo.From, session.RemoteAddr())
+	fmt.Printf("HELO received from %s (version %s)\n", helo.From, helo.Version)
 
 	response := Message{
 		Type:      TypeHELO,
@@ -576,6 +546,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		From:      s.myAddress,
 		To:        helo.From,
 		Timestamp: time.Now(),
+		Version:   s.myVersion,
 	}
 
 	if err := session.Send(response); err != nil {
@@ -601,10 +572,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 				fmt.Printf("=========================\n")
 
 				ack := Message{
-					Type: TypeACK,
-					ID:   msg.ID,
-					From: s.myAddress,
-					To:   msg.From,
+					Type:    TypeACK,
+					ID:      msg.ID,
+					From:    s.myAddress,
+					To:      msg.From,
+					Version: s.myVersion,
 				}
 				session.Send(ack)
 
@@ -624,15 +596,17 @@ func (s *Server) handleConnection(conn net.Conn) {
 								To:      msg.From,
 								Subject: "RELAY_ERROR",
 								Body:    "Failed to store message: " + err.Error(),
+								Version: s.myVersion,
 							}
 							session.Send(errMsg)
 						} else {
 							fmt.Printf("Stored relay message: %s -> %s\n", msg.From, msg.To)
 							ack := Message{
-								Type: TypeACK,
-								ID:   msg.ID,
-								From: s.myAddress,
-								To:   msg.From,
+								Type:    TypeACK,
+								ID:      msg.ID,
+								From:    s.myAddress,
+								To:      msg.From,
+								Version: s.myVersion,
 							}
 							session.Send(ack)
 						}
@@ -646,6 +620,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 						To:      msg.From,
 						Subject: "RELAY_DENIED",
 						Body:    fmt.Sprintf("Recipient %s is not in relay whitelist", msg.To),
+						Version: s.myVersion,
 					}
 					session.Send(nak)
 				}
@@ -659,6 +634,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 					To:      msg.From,
 					Subject: "RELAY_DISABLED",
 					Body:    "This node does not relay messages",
+					Version: s.myVersion,
 				}
 				session.Send(nak)
 			}
@@ -676,6 +652,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 						To:      msg.From,
 						Subject: "FETCH_ERROR",
 						Body:    "Failed to fetch messages: " + err.Error(),
+						Version: s.myVersion,
 					}
 					session.Send(errMsg)
 				} else if len(msgs) > 0 {
@@ -695,6 +672,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 						To:      msg.From,
 						Subject: "NO_MAIL",
 						Body:    "No messages for you",
+						Version: s.myVersion,
 					}
 					session.Send(empty)
 				}
@@ -706,6 +684,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 					To:      msg.From,
 					Subject: "FETCH_DISABLED",
 					Body:    "This node does not support FETCH",
+					Version: s.myVersion,
 				}
 				session.Send(nak)
 			}
