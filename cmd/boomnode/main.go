@@ -400,9 +400,12 @@ func runNode() {
 			fmt.Printf("⚠️ Cannot check for updates: %v\n", err)
 			return
 		}
-		if latest != "" && latest != Version {
+		if latest != "" && latest != Version && Version != "unknown" {
 			fmt.Printf("🚨 NEW VERSION AVAILABLE: %s (you have %s)\n", latest, Version)
-			fmt.Println("   Update: git pull && go build -o bn ./cmd/boomnode")
+			fmt.Println("   Download: https://github.com/BSXLAbS2025/boomnode/releases/latest")
+		} else if Version == "unknown" {
+			fmt.Printf("⚠️ Version not set (development build). Latest release: %s\n", latest)
+			fmt.Println("   Download: https://github.com/BSXLAbS2025/boomnode/releases/latest")
 		} else {
 			fmt.Printf("✅ You are running the latest version (%s)\n", Version)
 		}
@@ -528,9 +531,9 @@ func runNode() {
 			if err != nil {
 				continue
 			}
-			if latest != "" && latest != Version {
+			if latest != "" && latest != Version && Version != "unknown" {
 				fmt.Printf("🚨 NEW VERSION AVAILABLE: %s (you have %s)\n", latest, Version)
-				fmt.Println("   Update: git pull && go build -o bn ./cmd/boomnode")
+				fmt.Println("   Download: https://github.com/BSXLAbS2025/boomnode/releases/latest")
 			}
 		}
 	}()
