@@ -134,6 +134,7 @@ func (s *Server) handleMsg(w http.ResponseWriter, r *http.Request) {
 		Subject:   req.Subject,
 		Body:      req.Body,
 		Timestamp: time.Now(),
+		Version:   boomex.Version,
 	}
 	if tcpAddr == "" {
 		if s.db != nil {
@@ -144,7 +145,7 @@ func (s *Server) handleMsg(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer unreachable", 503)
 		return
 	}
-	if err := boomex.SendMessageToPeer(tcpAddr, s.myAddress, msg); err != nil {
+	if err := boomex.SendMessageToPeer(tcpAddr, s.myAddress, msg, boomex.Version); err != nil {
 		http.Error(w, "send failed: "+err.Error(), 500)
 		return
 	}
